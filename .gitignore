@@ -1,0 +1,74 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.env
+.env.*
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data (keep folder structure via .gitkeep)
+data/raw/**
+!data/raw/.gitkeep
+
+data/processed/**
+!data/processed/.gitkeep
+
+# Generated outputs (checkpoints, recall csv, metrics, logs)
+outputs/**
+!outputs/**/.gitkeep
+
+checkpoints/**
+
+# Model / large artifacts
+*.pth
+*.pt
+*.ckpt
+*.bin
+*.safetensors
+*.onnx
+*.h5
+*.pkl
+*.pickle
+*.joblib
+
+# Large tabular / interaction files
+*.csv
+*.tsv
+*.inter
+*.parquet
+*.feather
+*.arrow
+*.npy
+*.npz
+
+# Logs / temp
+*.log
+logs/
+tmp/
+temp/
+.cache/
+wandb/
