@@ -24,6 +24,9 @@ RAW_FEATURE_COLUMNS = [  # 从 articles.csv 读取的原始类别字段
     "colour_group_name",
     "section_name",
     "garment_group_name",
+    "department_name",
+    "index_name",
+    "index_group_name",
 ]
 ITEM_FILE_COLUMNS = [  # RecBole .item 文件输出字段（含类型后缀）
     "item_id:token",
@@ -32,6 +35,9 @@ ITEM_FILE_COLUMNS = [  # RecBole .item 文件输出字段（含类型后缀）
     "colour_group_name:token",
     "section_name:token",
     "garment_group_name:token",
+    "department_name:token",
+    "index_name:token",
+    "index_group_name:token",
 ]
 
 
