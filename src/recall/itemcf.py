@@ -101,9 +101,11 @@ def recall_itemcf(  # 基于 ItemCF 索引召回商品
     return ranked[:top_k]  # 返回 Top-K 召回结果
 
 
-if __name__ == "__main__":  # 脚本直接运行入口
-    index = build_itemcf_index()  # 构建 ItemCF 索引
-    sample_history = ["0706016001", "0685814001", "0751471001"]  # 示例用户历史
-    sample = recall_itemcf(sample_history, index, top_k=10)  # 召回 Top-10 示例
-    print(f"ItemCF index size: {len(index):,}")  # 打印索引规模
-    print("Top-10 sample:", sample)  # 打印 Top-10 示例结果
+if __name__ == "__main__":
+    index = build_itemcf_index()
+    # Use existing indexed items to avoid format mismatch in demo IDs.
+    sample_history = list(index.keys())[:3]
+    sample = recall_itemcf(sample_history, index, top_k=10)
+    print(f"ItemCF index size: {len(index):,}")
+    print("Top-10 sample:", sample)
+

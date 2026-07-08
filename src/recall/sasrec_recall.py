@@ -2,15 +2,26 @@
 
 from __future__ import annotations  # 启用延迟注解评估
 
-import argparse  # 导入命令行参数解析
-import csv  # 导入 CSV 读写
-from pathlib import Path  # 导入路径处理类
-from typing import Iterable  # 导入可迭代类型注解
+import argparse
+import csv
+from pathlib import Path
+import sys
+from typing import Iterable
 
-import numpy as np  # 导入 NumPy 数值计算库
-import pandas as pd  # 导入 pandas 数据处理库
-import torch  # 导入 PyTorch 深度学习框架
-from recbole.quick_start import load_data_and_model  # 导入 RecBole 模型加载函数
+import numpy as np
+import pandas as pd
+import torch
+
+if __package__ is None or __package__ == "":
+    project_root = Path(__file__).resolve().parents[2]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
+from src.pytorch_compat import patch_recbole_compat
+
+patch_recbole_compat()
+
+from recbole.quick_start import load_data_and_model
 
 DEFAULT_CKPT_DIR = Path("outputs/checkpoints/sasrec")  # 默认 SASRec 检查点目录
 DEFAULT_OUTPUT_DIR = Path("outputs/recommendations")  # 默认召回结果输出目录

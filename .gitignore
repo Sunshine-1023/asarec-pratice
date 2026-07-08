@@ -31,17 +31,16 @@ htmlcov/
 .ipynb_checkpoints/
 
 # Data (keep folder structure via .gitkeep)
-data/raw/**
+data/raw/*
 !data/raw/.gitkeep
 
-data/processed/**
+data/processed/*
 !data/processed/.gitkeep
 
-# Generated outputs (checkpoints, recall csv, metrics, logs)
-outputs/**
-!outputs/**/.gitkeep
-
-checkpoints/**
+# Generated outputs and logs
+outputs/
+log_tensorboard/
+checkpoints/
 
 # Model / large artifacts
 *.pth
@@ -55,20 +54,9 @@ checkpoints/**
 *.pickle
 *.joblib
 
-# Large tabular / interaction files
-*.csv
-*.tsv
-*.inter
-*.parquet
-*.feather
-*.arrow
-*.npy
-*.npz
+# TensorBoard / event logs
+events.out.tfevents*
 
 # Logs / temp
 *.log
-logs/
-tmp/
-temp/
-.cache/
-wandb/
+
