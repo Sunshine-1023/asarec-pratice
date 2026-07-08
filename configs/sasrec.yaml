@@ -38,12 +38,12 @@ initializer_range: 0.02
 MAX_ITEM_LIST_LENGTH: 50
 loss_type: CE
 
-epochs: 50
+epochs: 30
 train_batch_size: 512
 eval_batch_size: 512
 learning_rate: 0.001
 eval_step: 1
-stopping_step: 10
+stopping_step: 5
 train_neg_sample_args: null
 
 gpu_id: '0'
