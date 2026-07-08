@@ -161,6 +161,8 @@ def run_sasrec_with_device(config_path: Path) -> None:
         config_dict={"use_gpu": use_gpu, "gpu_id": gpu_id},
     )
     config.final_config_dict["device"] = selected_device
+    # Force tqdm progress bars in terminal during train/eval.
+    config.final_config_dict["show_progress"] = True
 
     init_seed(config["seed"], config["reproducibility"])
     init_logger(config)
