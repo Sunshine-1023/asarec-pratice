@@ -123,14 +123,24 @@ class WeightedFusionModel(torch.nn.Module):
         sasrec_scores = self.sasrec_model.full_sort_predict(interaction)
         pop_scores = self.pop_model.full_sort_predict(interaction)
         itemknn_scores = self.itemknn_model.full_sort_predict(interaction)
-        pop_scores = pop_scores.view(sasrec_scores.shape)
-        itemknn_scores = itemknn_scores.view(sasrec_scores.shape)
+
+        target_numel = sasrec_scores.numel()
+        if pop_scores.numel() != target_numel or itemknn_scores.numel() != target_numel:
+            raise RuntimeError(
+                "Fusion score shape mismatch: "
+                f"sasrec={tuple(sasrec_scores.shape)}, "
+                f"pop={tuple(pop_scores.shape)}, "
+                f"itemknn={tuple(itemknn_scores.shape)}"
+            )
+
+        pop_scores = pop_scores.reshape(sasrec_scores.shape)
+        itemknn_scores = itemknn_scores.reshape(sasrec_scores.shape)
         fused_scores = (
             self.w_pop * pop_scores
             + self.w_itemknn * itemknn_scores
             + self.w_sasrec * sasrec_scores
         )
-        return fused_scores.view(-1)
+        return fused_scores.reshape(-1)
 
 
 def parse_weight_grid(weight_grid: str | None) -> list[tuple[float, float, float]]:

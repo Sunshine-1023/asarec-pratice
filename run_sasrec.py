@@ -3,6 +3,7 @@
 import argparse
 import csv
 import json
+import re
 from logging import getLogger
 from pathlib import Path
 from collections import defaultdict
@@ -198,7 +199,9 @@ def _patch_tqdm_single_line() -> None:
 
 
 def run_sasrec_with_device(
-    config_path: Path, seed: int | None = None
+    config_path: Path,
+    model_name: str,
+    seed: int | None = None,
 ) -> tuple[float, dict, dict]:
     _patch_tqdm_single_line()
 
@@ -211,7 +214,7 @@ def run_sasrec_with_device(
         config_dict["seed"] = seed
 
     config = Config(
-        model="SASRec",
+        model=model_name,
         config_file_list=[str(config_path)],
         config_dict=config_dict,
     )
@@ -285,15 +288,16 @@ def main():
     max_item_list_length = _read_max_item_list_length(config_path)  # 读取最大序列长度
     prepare_recbole_benchmark_files(max_item_list_length)  # 准备 RecBole 基准文件
 
+    model_name = _read_model_name(config_path)
     seed_list = _parse_seeds(args.seed, args.seeds)
     if not seed_list:
-        run_sasrec_with_device(config_path)
+        run_sasrec_with_device(config_path, model_name=model_name)
         return
 
     all_results: list[dict] = []
     for run_seed in seed_list:
         best_valid_score, best_valid_result, test_result = run_sasrec_with_device(
-            config_path, seed=run_seed
+            config_path, model_name=model_name, seed=run_seed
         )
         all_results.append(
             {
