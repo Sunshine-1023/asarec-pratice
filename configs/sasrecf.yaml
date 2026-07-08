@@ -1,0 +1,55 @@
+# SASRecF 模型配置文件（H&M 数据集，RecBole 框架）
+# 数据集文件应放在 data/processed/ 目录下
+
+dataset: hm_seq  # 数据集名称，对应 data/processed/hm_seq/ 目录
+data_path: data/processed/  # 数据集根目录
+field_separator: "\t"  # 字段分隔符（制表符）
+USER_ID_FIELD: user_id  # 用户 ID 字段名
+ITEM_ID_FIELD: item_id  # 商品 ID 字段名
+TIME_FIELD: timestamp  # 时间戳字段名
+ITEM_LIST_LENGTH_FIELD: item_length  # 历史序列长度字段名
+LIST_SUFFIX: _list  # 序列字段后缀（如 item_id_list）
+seq_separator: " "  # 序列内商品 ID 的分隔符（空格）
+
+load_col:  # 从 benchmark split 文件加载的列
+  inter: [user_id, item_id_list, item_length, item_id, timestamp]  # 序列交互字段
+  item: [item_id, product_type_name, product_group_name, colour_group_name, section_name, garment_group_name]  # 商品特征字段
+
+eval_args:  # 评估设置
+  order: TO  # 按时间顺序排列（Temporal Order）
+  group_by: user  # 按用户分组评估
+  mode: full  # 全量商品排序评估（对全部 item 打分）
+
+benchmark_filename: [train, valid, test]  # 固定使用 train/valid/test benchmark 文件
+
+metrics: ['MAP', 'Recall', 'NDCG', 'MRR', 'Hit', 'Precision']  # 训练过程中计算的指标
+topk: [12]  # Top-K 评估（与 H&M 竞赛 K=12 一致）
+valid_metric: NDCG@12  # 早停与选最优 checkpoint 的验证指标
+
+model: SASRecF  # 使用带商品特征的 SASRecF 模型
+selected_features: [product_type_name, product_group_name, colour_group_name, section_name, garment_group_name]  # 使用的商品类别特征
+pooling_mode: sum  # 多个特征 embedding 的聚合方式
+
+hidden_size: 256  # Transformer 隐藏层维度
+inner_size: 512  # 前馈网络中间层维度
+n_layers: 2  # Transformer 层数
+n_heads: 4  # 多头注意力头数
+hidden_dropout_prob: 0.2  # 隐藏层 Dropout 比例
+attn_dropout_prob: 0.2  # 注意力 Dropout 比例
+hidden_act: gelu  # 激活函数
+layer_norm_eps: 1e-12  # LayerNorm 数值稳定项
+initializer_range: 0.02  # 参数初始化范围
+MAX_ITEM_LIST_LENGTH: 100  # 用户历史序列最大长度
+loss_type: CE  # 损失函数（交叉熵）
+
+epochs: 30  # 最大训练轮数
+train_batch_size: 2048  # 训练 batch 大小（8GB 显存友好）
+eval_batch_size: 2048  # 评估 batch 大小
+learning_rate: 0.0005  # 学习率
+eval_step: 1  # 每 N 个 epoch 做一次验证
+stopping_step: 5  # 验证指标连续 N 轮不提升则早停
+train_neg_sample_args: null  # SASRec/SASRecF 不使用负采样（CE 全量 softmax）
+
+gpu_id: '0'  # GPU 编号（实际设备由 run_sasrec.py 自动选择 cuda/mps/cpu）
+checkpoint_dir: outputs/checkpoints/sasrecf  # 模型 checkpoint 保存目录
+log_wandb: False  # 是否启用 Weights & Biases 日志

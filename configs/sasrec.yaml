@@ -1,29 +1,29 @@
-# SASRec config for H&M dataset (RecBole)
-# Dataset files should be placed under data/processed/
+# SASRec 模型配置文件（H&M 数据集，RecBole 框架）
+# 数据集文件应放在 data/processed/ 目录下
 
-dataset: hm_seq
-data_path: data/processed/
-field_separator: "\t"
-USER_ID_FIELD: user_id
-ITEM_ID_FIELD: item_id
-TIME_FIELD: timestamp
-ITEM_LIST_LENGTH_FIELD: item_length
-LIST_SUFFIX: _list
-seq_separator: " "
+dataset: hm_seq  # 数据集名称，对应 data/processed/hm_seq/ 目录
+data_path: data/processed/  # 数据集根目录
+field_separator: "\t"  # 字段分隔符（制表符）
+USER_ID_FIELD: user_id  # 用户 ID 字段名
+ITEM_ID_FIELD: item_id  # 商品 ID 字段名
+TIME_FIELD: timestamp  # 时间戳字段名
+ITEM_LIST_LENGTH_FIELD: item_length  # 历史序列长度字段名
+LIST_SUFFIX: _list  # 序列字段后缀（如 item_id_list）
+seq_separator: " "  # 序列内商品 ID 的分隔符（空格）
 
-load_col:
-  inter: [user_id, item_id_list, item_length, item_id, timestamp]
+load_col:  # 从 .inter 文件加载的列
+  inter: [user_id, item_id_list, item_length, item_id, timestamp]  # benchmark 序列格式所需字段
 
-eval_args:
-  order: TO
-  group_by: user
-  mode: full
+eval_args:  # 评估设置
+  order: TO  # 按时间顺序排列（Temporal Order）
+  group_by: user  # 按用户分组评估
+  mode: full  # 全量商品排序评估（对全部 item 打分）
 
-benchmark_filename: [train, valid, test]
+benchmark_filename: [train, valid, test]  # 使用 train/valid/test 三份 benchmark 文件
 
-metrics: ['MAP', 'Recall', 'NDCG', 'MRR', 'Hit', 'Precision']
-topk: [12]
-valid_metric: NDCG@12
+metrics: ['MAP', 'Recall', 'NDCG', 'MRR', 'Hit', 'Precision']  # 训练过程中计算的指标
+topk: [12]  # Top-K 评估（与 H&M 竞赛 K=12 一致）
+valid_metric: NDCG@12  # 早停与选最优 checkpoint 的验证指标
 
 model: SASRec
 hidden_size: 256
@@ -46,6 +46,6 @@ eval_step: 1
 stopping_step: 5
 train_neg_sample_args: null
 
-gpu_id: '0'
-checkpoint_dir: outputs/checkpoints/sasrec
-log_wandb: False
+gpu_id: '0'  # GPU 编号（实际设备由 run_sasrec.py 自动选择 cuda/mps/cpu）
+checkpoint_dir: outputs/checkpoints/sasrec  # 模型 checkpoint 保存目录
+log_wandb: False  # 是否启用 Weights & Biases 日志
