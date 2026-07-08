@@ -21,6 +21,7 @@ from recbole.utils import get_model, get_trainer, init_logger, init_seed
 
 from src.data.preprocess import build_inter_file  # 构建交互文件
 from src.data.split import split_by_time  # 按时间划分数据集
+from src.data.build_item_features import build_item_features  # 构建 hm_seq.item 商品特征文件
 
 SOURCE_DIR = Path("data/processed/hm")  # 原始划分数据目录
 TARGET_DIR = Path("data/processed/hm_seq")  # 序列化数据输出目录
@@ -289,6 +290,9 @@ def main():
     prepare_recbole_benchmark_files(max_item_list_length)  # 准备 RecBole 基准文件
 
     model_name = _read_model_name(config_path)
+    if model_name.upper() == "SASRECF":
+        build_item_features()
+
     seed_list = _parse_seeds(args.seed, args.seeds)
     if not seed_list:
         run_sasrec_with_device(config_path, model_name=model_name)
