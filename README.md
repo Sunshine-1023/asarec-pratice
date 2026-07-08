@@ -108,6 +108,15 @@ python run_sasrec.py --skip-preprocess
 - 训练前会自动把 `hm.train/valid/test.inter` 转为 `hm_seq.*.inter`（含 `item_id_list`、`item_length`）
 - 设备优先级：`cuda > mps > cpu`
 - checkpoint 默认保存到 `outputs/checkpoints/sasrec/`
+- 当前默认配置：`MAX_ITEM_LIST_LENGTH=100`、`hidden_size=256`、`loss_type=BPR`、`learning_rate=5e-4`
+
+多随机种子对比训练（用于比较稳定性）：
+
+```bash
+python run_sasrec.py --skip-preprocess --seeds 2024,2025,2026
+```
+
+结果汇总会输出到 `outputs/evaluation/sasrec_multi_seed_results.json`。
 
 如需从头跑数据预处理：
 
@@ -166,6 +175,26 @@ python run_fusion_eval.py \
 
 - 融合推荐：`outputs/recommendations/fusion_valid.csv` / `fusion_test.csv`
 - 评估指标：`outputs/evaluation/fusion_valid_metrics.json` / `fusion_test_metrics.json`
+
+## 单通道评估（Popular / ItemCF）
+
+若要查看不经过融合时，各召回通道自己的 MAP@12：
+
+```bash
+python run_channel_eval.py --channel both --eval-split both
+```
+
+可选参数：
+
+- `--channel popular|itemcf|both`
+- `--eval-split valid|test|both`
+
+输出文件：
+
+- 指标：`outputs/evaluation/popular_only_{split}_metrics.json`
+- 指标：`outputs/evaluation/itemcf_only_{split}_metrics.json`
+- 推荐：`outputs/recommendations/popular_{split}.csv`
+- 推荐：`outputs/recommendations/itemcf_{split}.csv`
 
 ## 评估指标
 

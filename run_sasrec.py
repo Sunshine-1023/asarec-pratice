@@ -2,12 +2,18 @@
 
 import argparse
 import csv
+import json
 from logging import getLogger
 from pathlib import Path
 from collections import defaultdict
 
 import pandas as pd
 import torch
+
+from src.pytorch_compat import patch_recbole_compat
+
+patch_recbole_compat()
+
 from recbole.config import Config
 from recbole.data import create_dataset, data_preparation
 from recbole.utils import get_model, get_trainer, init_logger, init_seed
@@ -150,15 +156,46 @@ def _select_device() -> torch.device:
     return torch.device("cpu")
 
 
-def run_sasrec_with_device(config_path: Path) -> None:
+def _patch_tqdm_single_line() -> None:
+    """Force tqdm to update in one terminal line."""
+    try:
+        from tqdm.std import tqdm as tqdm_cls
+    except Exception:
+        return
+
+    if getattr(tqdm_cls, "_single_line_patch_applied", False):
+        return
+
+    original_init = tqdm_cls.__init__
+
+    def _patched_init(self, *args, **kwargs):
+        kwargs.setdefault("leave", False)
+        kwargs.setdefault("position", 0)
+        kwargs.setdefault("dynamic_ncols", True)
+        kwargs.setdefault("mininterval", 0.2)
+        return original_init(self, *args, **kwargs)
+
+    tqdm_cls.__init__ = _patched_init
+    tqdm_cls._single_line_patch_applied = True
+
+
+def run_sasrec_with_device(
+    config_path: Path, seed: int | None = None
+) -> tuple[float, dict, dict]:
+    _patch_tqdm_single_line()
+
     selected_device = _select_device()
     use_gpu = selected_device.type == "cuda"
     gpu_id = "0" if use_gpu else ""
 
+    config_dict = {"use_gpu": use_gpu, "gpu_id": gpu_id}
+    if seed is not None:
+        config_dict["seed"] = seed
+
     config = Config(
         model="SASRec",
         config_file_list=[str(config_path)],
-        config_dict={"use_gpu": use_gpu, "gpu_id": gpu_id},
+        config_dict=config_dict,
     )
     config.final_config_dict["device"] = selected_device
     # Force tqdm progress bars in terminal during train/eval.
@@ -168,6 +205,7 @@ def run_sasrec_with_device(config_path: Path) -> None:
     init_logger(config)
     logger = getLogger()
     logger.info(f"Selected device: {selected_device}")
+    logger.info(f"Seed: {config['seed']}")
 
     dataset = create_dataset(config)
     train_data, valid_data, test_data = data_preparation(config, dataset)
@@ -186,12 +224,35 @@ def run_sasrec_with_device(config_path: Path) -> None:
     logger.info(f"best valid score: {best_valid_score}")
     logger.info(f"best valid result: {best_valid_result}")
     logger.info(f"test result: {test_result}")
+    return best_valid_score, best_valid_result, test_result
+
+
+def _parse_seeds(seed: int | None, seeds: str | None) -> list[int]:
+    if seeds:
+        parsed = [int(token.strip()) for token in seeds.split(",") if token.strip()]
+        if not parsed:
+            raise ValueError("--seeds is provided but empty.")
+        return parsed
+    if seed is not None:
+        return [seed]
+    return []
+
+
+def _metrics_to_float_dict(metrics: dict) -> dict:
+    return {key: float(value) for key, value in metrics.items()}
 
 
 def main():
     parser = argparse.ArgumentParser(description="Train SASRec on H&M data")
     parser.add_argument("--config", default="configs/sasrec.yaml")
     parser.add_argument("--skip-preprocess", action="store_true")
+    parser.add_argument("--seed", type=int, default=None, help="Run one custom seed")
+    parser.add_argument(
+        "--seeds",
+        type=str,
+        default=None,
+        help="Run multiple seeds, comma-separated (e.g., 2024,2025,2026)",
+    )
     args = parser.parse_args()
 
     config_path = Path(args.config)
@@ -207,7 +268,32 @@ def main():
     max_item_list_length = _read_max_item_list_length(config_path)
     prepare_recbole_benchmark_files(max_item_list_length)
 
-    run_sasrec_with_device(config_path)
+    seed_list = _parse_seeds(args.seed, args.seeds)
+    if not seed_list:
+        run_sasrec_with_device(config_path)
+        return
+
+    all_results: list[dict] = []
+    for run_seed in seed_list:
+        best_valid_score, best_valid_result, test_result = run_sasrec_with_device(
+            config_path, seed=run_seed
+        )
+        all_results.append(
+            {
+                "seed": run_seed,
+                "best_valid_score": float(best_valid_score),
+                "best_valid_result": _metrics_to_float_dict(best_valid_result),
+                "test_result": _metrics_to_float_dict(test_result),
+            }
+        )
+
+    report_path = Path("outputs/evaluation/sasrec_multi_seed_results.json")
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        json.dumps({"config": str(config_path), "results": all_results}, indent=2),
+        encoding="utf-8",
+    )
+    print(f"Saved multi-seed results: {report_path}")
 
 
 if __name__ == "__main__":

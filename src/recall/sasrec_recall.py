@@ -5,11 +5,22 @@ from __future__ import annotations
 import argparse
 import csv
 from pathlib import Path
+import sys
 from typing import Iterable
 
 import numpy as np
 import pandas as pd
 import torch
+
+if __package__ is None or __package__ == "":
+    project_root = Path(__file__).resolve().parents[2]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
+from src.pytorch_compat import patch_recbole_compat
+
+patch_recbole_compat()
+
 from recbole.quick_start import load_data_and_model
 
 DEFAULT_CKPT_DIR = Path("outputs/checkpoints/sasrec")

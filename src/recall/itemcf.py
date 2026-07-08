@@ -104,7 +104,8 @@ def recall_itemcf(
 
 if __name__ == "__main__":
     index = build_itemcf_index()
-    sample_history = ["0706016001", "0685814001", "0751471001"]
+    # Use existing indexed items to avoid format mismatch in demo IDs.
+    sample_history = list(index.keys())[:3]
     sample = recall_itemcf(sample_history, index, top_k=10)
     print(f"ItemCF index size: {len(index):,}")
     print("Top-10 sample:", sample)
