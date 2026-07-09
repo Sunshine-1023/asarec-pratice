@@ -1,5 +1,8 @@
 # FashionRec-Transformer
 
+> 📖 **完整项目指南（推荐先读）：** [docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md)  
+> 从零讲清数据 → 训练 → 召回 → 融合 → 评估全流程，适合小白入门。
+
 基于 H&M 交易数据的时尚推荐项目，使用 [RecBole](https://recbole.io/) 训练 **SASRec**，并与 **Popular / ItemCF** 进行多路召回融合，最终通过离线评估输出 **MAP@12** 等指标。
 
 ## 项目结构
