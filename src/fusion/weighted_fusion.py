@@ -5,8 +5,52 @@ from __future__ import annotations  # 启用延迟注解评估
 import csv  # 导入 CSV 读写模块
 from collections import defaultdict  # 导入带默认值的字典
 from pathlib import Path  # 导入路径处理类
+from typing import Literal  # 导入字面量类型
 
 import pandas as pd  # 导入 pandas 数据分析库
+
+
+ActivityTier = Literal["high", "medium", "low", "cold_start"]  # 用户活跃度分层
+
+# 序列模型通道权重模板（sasrec / sasrecf 共用）
+ACTIVITY_WEIGHTS: dict[ActivityTier, dict[str, float]] = {
+    "high": {"sequence": 0.60, "popular": 0.10, "category_popular": 0.10, "item2item": 0.20},  # 历史 >= 10
+    "medium": {"sequence": 0.40, "popular": 0.15, "category_popular": 0.15, "item2item": 0.30},  # 历史 3~9
+    "low": {"sequence": 0.15, "popular": 0.35, "category_popular": 0.25, "item2item": 0.25},  # 历史 1~2
+    "cold_start": {"sequence": 0.00, "popular": 0.55, "category_popular": 0.30, "item2item": 0.15},  # 无历史
+}
+
+
+def classify_activity_tier(history_len: int) -> ActivityTier:  # 按历史购买次数划分活跃度
+    if history_len <= 0:  # 冷启动
+        return "cold_start"
+    if history_len <= 2:  # 低活跃
+        return "low"
+    if history_len <= 9:  # 中活跃
+        return "medium"
+    return "high"  # 高活跃（>= 10）
+
+
+def get_channel_weights_for_user(  # 按用户历史长度返回通道权重
+    history_len: int,
+    sequence_channel: str = "sasrec",
+) -> dict[str, float]:
+    """Return per-user fusion weights; sequence channel key matches sasrec or sasrecf."""
+    tier = classify_activity_tier(history_len)  # 判定活跃度分层
+    template = ACTIVITY_WEIGHTS[tier]  # 取对应权重模板
+    return {  # 组装通道权重字典
+        sequence_channel: template["sequence"],
+        "popular": template["popular"],
+        "category_popular": template["category_popular"],
+        "item2item": template["item2item"],
+    }
+
+
+def infer_sequence_channel(recall_csv: str | Path) -> str:  # 从召回文件名推断序列通道名
+    name = Path(recall_csv).stem.lower()  # 文件名小写
+    if name.startswith("sasrecf"):  # SASRecF 召回
+        return "sasrecf"
+    return "sasrec"  # 默认 SASRec
 
 
 def build_user_history(*inter_paths: str | Path) -> dict[str, list[str]]:  # 从交互文件构建用户历史

@@ -1,4 +1,4 @@
-"""SASRec recall export utilities."""  # SASRec 召回导出工具模块
+"""SASRec / SASRecF recall export utilities."""  # SASRec 系列模型召回导出工具模块
 
 from __future__ import annotations  # 启用延迟注解评估
 
@@ -11,6 +11,7 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 import torch
+import yaml
 
 if __package__ is None or __package__ == "":
     project_root = Path(__file__).resolve().parents[2]
@@ -23,14 +24,32 @@ patch_recbole_compat()
 
 from recbole.quick_start import load_data_and_model
 
+DEFAULT_CONFIG = Path("configs/sasrec.yaml")  # 默认 SASRec 配置文件
 DEFAULT_CKPT_DIR = Path("outputs/checkpoints/sasrec")  # 默认 SASRec 检查点目录
+DEFAULT_RECALL_TOP_K = 100  # 默认召回 Top-K
 DEFAULT_OUTPUT_DIR = Path("outputs/recommendations")  # 默认召回结果输出目录
 VALID_INTER = Path("data/processed/hm/hm.valid.inter")  # 验证集交互文件路径
 TEST_INTER = Path("data/processed/hm/hm.test.inter")  # 测试集交互文件路径
 
 
-def default_output_path(eval_split: str) -> Path:  # 根据评估划分生成默认输出路径
-    return DEFAULT_OUTPUT_DIR / f"sasrec_{eval_split}.csv"  # 返回 sasrec_{split}.csv 路径
+def _load_recall_settings(config_path: Path | None) -> tuple[Path, int, str]:
+    """Read checkpoint_dir, recall_top_k, and channel name from a yaml config."""
+    config_path = config_path or DEFAULT_CONFIG
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config not found: {config_path}")
+
+    with config_path.open("r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+
+    checkpoint_dir = Path(cfg.get("checkpoint_dir", DEFAULT_CKPT_DIR))
+    recall_top_k = int(cfg.get("recall_top_k", DEFAULT_RECALL_TOP_K))
+    model_name = str(cfg.get("model", "SASRec"))
+    channel = model_name.lower()
+    return checkpoint_dir, recall_top_k, channel
+
+
+def default_output_path(eval_split: str, channel: str = "sasrec") -> Path:  # 根据评估划分生成默认输出路径
+    return DEFAULT_OUTPUT_DIR / f"{channel}_{eval_split}.csv"  # 返回 {channel}_{split}.csv 路径
 
 
 def _latest_checkpoint(checkpoint_dir: Path) -> Path:  # 查找目录中最新的检查点文件
@@ -82,34 +101,48 @@ def _resolve_user_rows(eval_dataset, uid_internal_list: list[int]) -> list[tuple
     return rows  # 返回用户行映射列表
 
 
-def export_sasrec_recall(  # 导出 SASRec Top-K 召回结果到 CSV
+def export_sasrec_recall(  # 导出 SASRec / SASRecF Top-K 召回结果到 CSV
     eval_split: str = "valid",  # 评估划分：valid 或 test
     model_file: str | Path | None = None,  # 模型检查点路径
     output_path: str | Path | None = None,  # 输出 CSV 路径
-    top_k: int = 100,  # 每个用户召回数量
+    top_k: int | None = None,  # 每个用户召回数量（默认从 config 读取 recall_top_k）
     batch_size: int = 512,  # 推理批大小
+    config_path: str | Path | None = None,  # 模型配置文件路径
+    checkpoint_dir: str | Path | None = None,  # 检查点目录（优先于 config）
+    channel: str | None = None,  # 召回通道名（默认从 config 的 model 推导）
 ) -> Path:  # 返回输出文件路径
     """
-    Export SASRec top-k recall for one eval split.
+    Export SASRec-family top-k recall for one eval split.
+
+    Strategy: recall Top-100 first, then truncate to Top-12 in fusion/final eval.
 
     valid:
       - uses RecBole valid_data (history = train)
       - targets users in hm.valid.inter
-      - writes outputs/recommendations/sasrec_valid.csv
+      - writes outputs/recommendations/{channel}_valid.csv
 
     test:
       - uses RecBole test_data (history = train + valid)
       - targets users in hm.test.inter
-      - writes outputs/recommendations/sasrec_test.csv
-    """  # 导出指定评估划分的 SASRec Top-K 召回 CSV
+      - writes outputs/recommendations/{channel}_test.csv
+    """  # 导出指定评估划分的 SASRec 系列 Top-K 召回 CSV
     if eval_split not in {"valid", "test"}:  # 校验评估划分名称
         raise ValueError("eval_split must be 'valid' or 'test'")  # 非法划分则报错
 
-    output_path = Path(output_path or default_output_path(eval_split))  # 解析输出路径
+    cfg_checkpoint_dir, cfg_recall_top_k, cfg_channel = _load_recall_settings(
+        Path(config_path) if config_path is not None else None
+    )
+    resolved_checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir is not None else cfg_checkpoint_dir
+    resolved_top_k = cfg_recall_top_k if top_k is None else top_k
+    resolved_channel = channel or cfg_channel
+
+    output_path = Path(
+        output_path or default_output_path(eval_split, channel=resolved_channel)
+    )  # 解析输出路径
     output_path.parent.mkdir(parents=True, exist_ok=True)  # 确保输出目录存在
 
     if model_file is None:  # 若未指定检查点
-        model_file = _latest_checkpoint(DEFAULT_CKPT_DIR)  # 使用最新检查点
+        model_file = _latest_checkpoint(resolved_checkpoint_dir)  # 使用最新检查点
     else:  # 若指定了检查点路径
         model_file = Path(model_file)  # 转为 Path 对象
         if not model_file.exists():  # 若检查点不存在
@@ -147,20 +180,21 @@ def export_sasrec_recall(  # 导出 SASRec Top-K 召回结果到 CSV
             scores = scores.view(-1, eval_dataset.item_num)  # 重塑为 (batch, item_num)
             scores[:, 0] = -np.inf  # 屏蔽 padding 商品（索引 0）
 
-            topk_scores, topk_iids = torch.topk(scores, top_k)  # 取 Top-K 分数与商品 ID
+            topk_scores, topk_iids = torch.topk(scores, resolved_top_k)  # 取 Top-K 分数与商品 ID
             uid_tokens = eval_dataset.id2token(uid_field, np.array(uids))  # 内部用户 ID 转 token
             iid_tokens = eval_dataset.id2token(iid_field, topk_iids.cpu().numpy())  # 内部商品 ID 转 token
             score_mat = topk_scores.cpu().numpy()  # 分数矩阵转到 CPU NumPy
 
             for i in range(len(batch)):  # 遍历批次内每个用户
                 user_id = _as_str(uid_tokens[i])  # 获取用户 token 字符串
-                for rank in range(top_k):  # 遍历 Top-K 排名
+                for rank in range(resolved_top_k):  # 遍历 Top-K 排名
                     item_id = _as_str(iid_tokens[i][rank])  # 获取商品 token 字符串
                     score = float(score_mat[i][rank])  # 获取预测分数
-                    writer.writerow([user_id, item_id, score, rank + 1, "sasrec"])  # 写入一行召回结果
+                    writer.writerow([user_id, item_id, score, rank + 1, resolved_channel])  # 写入一行召回结果
                     total_rows += 1  # 累计导出行数
 
     print(f"Eval split: {eval_split}")  # 打印评估划分
+    print(f"Recall top-k: {resolved_top_k}")  # 打印召回 Top-K
     print(f"Model checkpoint: {model_file}")  # 打印模型检查点路径
     print(f"Users exported: {len(user_rows):,}")  # 打印导出用户数
     print(f"Rows exported: {total_rows:,}")  # 打印导出总行数
@@ -169,11 +203,18 @@ def export_sasrec_recall(  # 导出 SASRec Top-K 召回结果到 CSV
 
 
 def main() -> None:  # 命令行入口函数
-    parser = argparse.ArgumentParser(description="Export SASRec top-k recall to CSV")  # 创建参数解析器
+    parser = argparse.ArgumentParser(description="Export SASRec/SASRecF top-k recall to CSV")  # 创建参数解析器
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)  # 模型配置文件路径
     parser.add_argument("--eval-split", choices=["valid", "test"], default="valid")  # 评估划分参数
     parser.add_argument("--model-file", type=Path, default=None)  # 模型检查点路径参数
+    parser.add_argument("--checkpoint-dir", type=Path, default=None)  # 检查点目录参数
     parser.add_argument("--output-path", type=Path, default=None)  # 输出 CSV 路径参数
-    parser.add_argument("--top-k", type=int, default=100)  # Top-K 召回数量参数
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=None,
+        help="Recall top-k (default: recall_top_k from config, usually 100)",
+    )  # Top-K 召回数量参数
     parser.add_argument("--batch-size", type=int, default=512)  # 推理批大小参数
     args = parser.parse_args()  # 解析命令行参数
 
@@ -183,6 +224,8 @@ def main() -> None:  # 命令行入口函数
         output_path=args.output_path,  # 传入输出路径
         top_k=args.top_k,  # 传入 Top-K
         batch_size=args.batch_size,  # 传入批大小
+        config_path=args.config,  # 传入配置文件
+        checkpoint_dir=args.checkpoint_dir,  # 传入检查点目录
     )  # 结束 export_sasrec_recall 调用
 
 

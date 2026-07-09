@@ -1,4 +1,4 @@
-"""Popular-item recall channel."""  # 热门商品召回通道模块
+"""Popular-item recall channel with time-decayed popularity."""  # 带时间衰减的热门商品召回通道
 
 from __future__ import annotations  # 启用延迟注解评估
 
@@ -9,24 +9,75 @@ import pandas as pd  # 导入 pandas 用于读取交互数据
 
 
 DEFAULT_INTER_PATH = Path("data/processed/hm/hm.train.inter")  # 默认训练集交互文件路径
+POPULAR_RECALL_TOP_K = 50  # 全局热门召回 Top-K
+WINDOW_WEEKS = (1, 2, 4, 8)  # 时间衰减窗口（周）
+WINDOW_WEIGHTS = (0.5, 0.3, 0.15, 0.05)  # 各窗口融合权重
 
 
-def build_popular_index(*inter_paths: str | Path) -> list[tuple[str, float]]:  # 构建全局热门商品索引
-    """Build a global popularity index from one or more interaction files."""  # 从一个或多个交互文件构建热门度索引
+def _week_window_start(max_date: pd.Timestamp, weeks: int) -> pd.Timestamp:  # 计算含 max_date 的 N 周窗口起始日
+    max_day = pd.Timestamp(max_date).normalize()  # 归一化到自然日
+    return max_day - pd.Timedelta(days=weeks * 7 - 1)  # 含首尾共 weeks*7 天
+
+
+def _load_interactions(*inter_paths: str | Path) -> pd.DataFrame:  # 读取交互文件并合并
     if not inter_paths:  # 若未指定交互文件路径
         inter_paths = (DEFAULT_INTER_PATH,)  # 使用默认训练集路径
-    item_ids: list[str] = []  # 初始化商品 ID 列表
+
+    frames: list[pd.DataFrame] = []  # 存放各文件 DataFrame
     for path in inter_paths:  # 遍历每个交互文件
-        df = pd.read_csv(path, sep="\t", usecols=["item_id:token"])  # 读取商品 ID 列
-        item_ids.extend(df["item_id:token"].astype(str).tolist())  # 追加当前文件中的商品 ID
-    counts = Counter(item_ids)  # 统计每个商品出现次数
-    return [(item_id, float(count)) for item_id, count in counts.most_common()]  # 按频次降序返回商品及分数
+        df = pd.read_csv(  # 读取商品 ID 与时间戳
+            path,
+            sep="\t",
+            usecols=["item_id:token", "timestamp:float"],
+        )
+        df["item_id:token"] = df["item_id:token"].astype(str)  # 商品 ID 转字符串
+        df["date"] = pd.to_datetime(df["timestamp:float"], unit="s").dt.normalize()  # 时间戳转自然日
+        frames.append(df[["item_id:token", "date"]])  # 只保留所需列
+
+    return pd.concat(frames, ignore_index=True)  # 合并全部交互
+
+
+def build_popular_index(  # 构建时间衰减热门商品索引
+    *inter_paths: str | Path,
+    window_weeks: tuple[int, ...] = WINDOW_WEEKS,
+    window_weights: tuple[float, ...] = WINDOW_WEIGHTS,
+) -> list[tuple[str, float]]:
+    """
+    Build a time-decayed popularity index from one or more interaction files.
+
+    Instead of all-time global counts, blend rolling-window heat:
+      hot_score = 0.5 * heat_1w + 0.3 * heat_2w + 0.15 * heat_4w + 0.05 * heat_8w
+    """
+    if len(window_weeks) != len(window_weights):  # 校验窗口与权重长度
+        raise ValueError("window_weeks and window_weights must have the same length")
+
+    df = _load_interactions(*inter_paths)  # 加载交互数据
+    if df.empty:  # 若无交互记录
+        return []  # 返回空索引
+
+    max_date = df["date"].max()  # 数据最大日期
+    window_counts: list[Counter[str]] = []  # 各时间窗口的商品计数
+    for weeks in window_weeks:  # 遍历每个时间窗口
+        start_date = _week_window_start(max_date, weeks)  # 计算窗口起始日
+        window_df = df[df["date"] >= start_date]  # 保留窗口内交互
+        window_counts.append(Counter(window_df["item_id:token"].tolist()))  # 统计窗口内热度
+
+    all_items = set().union(*window_counts)  # 合并全部出现过的商品
+    scores: dict[str, float] = {}  # 商品到衰减热度的映射
+    for item_id in all_items:  # 遍历每个商品
+        score = 0.0  # 初始化融合分数
+        for weight, counts in zip(window_weights, window_counts):  # 按权重融合各窗口热度
+            score += weight * float(counts.get(item_id, 0))  # 累加加权热度
+        scores[item_id] = score  # 保存商品分数
+
+    ranked = sorted(scores.items(), key=lambda x: (-x[1], x[0]))  # 按分数降序、ID 升序排序
+    return ranked  # 返回热门商品索引
 
 
 def recall_popular(  # 基于热门度召回商品
     popular_index: list[tuple[str, float]],  # 热门商品索引列表
     user_history: set[str] | None = None,  # 用户历史交互商品集合
-    top_k: int = 100,  # 召回数量上限
+    top_k: int = POPULAR_RECALL_TOP_K,  # 召回数量上限
 ) -> list[tuple[str, float]]:  # 返回商品 ID 与分数列表
     """Recall top-k popular items excluding the user's history."""  # 召回 Top-K 热门商品并排除用户历史
     history = {str(x) for x in user_history} if user_history else set()  # 规范化用户历史为字符串集合
@@ -41,7 +92,7 @@ def recall_popular(  # 基于热门度召回商品
 
 
 if __name__ == "__main__":  # 脚本直接运行入口
-    index = build_popular_index()  # 构建热门索引
+    index = build_popular_index()  # 构建时间衰减热门索引
     sample = recall_popular(index, user_history=set(), top_k=10)  # 召回 Top-10 示例
     print(f"Popular index size: {len(index):,}")  # 打印索引规模
     print("Top-10 sample:", sample)  # 打印 Top-10 示例结果
