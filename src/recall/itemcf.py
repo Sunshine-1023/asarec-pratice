@@ -16,7 +16,7 @@ def build_itemcf_index(  # 构建物品协同过滤相似度索引
     inter_paths: str | Path | list[str | Path] | tuple[str | Path, ...] = DEFAULT_INTER_PATH,  # 交互文件路径
     min_cooccur: int = 2,  # 最小共现次数阈值
     top_sim_k: int = 100,  # 每个物品保留的最相似邻居数
-    max_user_items: int = 50,  # 每个用户最多保留的交互商品数
+    max_user_items: int = 100,  # 每个用户最多保留的交互商品数
 ) -> dict[str, dict[str, float]]:  # 返回物品到相似物品的映射
     """Build item-to-item similarity index from one or more interaction files."""  # 从交互数据构建物品相似度索引
     if isinstance(inter_paths, (str, Path)):  # 若传入单个路径

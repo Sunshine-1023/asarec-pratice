@@ -2,11 +2,17 @@
 
 from __future__ import annotations  # 启用延迟注解评估
 
+import sys  # 导入系统模块用于路径注入
 from collections import defaultdict  # 导入默认字典
 from dataclasses import dataclass  # 导入数据类
 from pathlib import Path  # 导入路径处理类
 
 import pandas as pd  # 导入 pandas
+
+if __package__ is None or __package__ == "":  # 若以脚本方式直接运行
+    project_root = Path(__file__).resolve().parents[2]  # 定位项目根目录
+    if str(project_root) not in sys.path:  # 若根目录不在搜索路径中
+        sys.path.insert(0, str(project_root))  # 注入项目根目录到 sys.path
 
 from src.data.build_item_features import (  # 复用商品特征清洗逻辑
     RAW_ARTICLES_PATH,  # 原始商品元数据路径

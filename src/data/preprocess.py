@@ -8,6 +8,8 @@ from pathlib import Path  # 路径对象
 import pandas as pd  # 数据处理
 
 
+
+
 RAW_DIR = Path("data/raw")  # 原始数据目录
 FILTERED_RAW_PATH = RAW_DIR / "filtered/transactions_train.csv"  # 过滤后交易文件路径
 RAW_PATH = RAW_DIR / "transactions_train.csv"  # 未过滤交易文件路径
@@ -17,6 +19,7 @@ INTER_FILE = DATASET_DIR / "hm.inter"  # RecBole 交互文件路径
 
 WEEKS = 6  # 时间窗口周数（与 split 的 total_weeks 一致）
 MIN_USER_PURCHASES = 5  # 用户最少购买次数阈值
+MAX_USER_HISTORY = 100  # 每用户保留的最大行为条数（与序列模型 MAX_ITEM_LIST_LENGTH 对齐）
 
 
 def _week_window_start(max_date: pd.Timestamp, weeks: int) -> pd.Timestamp:  # 计算含 max_date 的 N 周窗口起始日
@@ -35,6 +38,7 @@ def load_transactions(  # 加载并预处理交易为 RecBole 列格式
     path: Path | None = None,  # 输入 CSV 路径
     weeks: int = WEEKS,  # 时间窗口周数
     min_user_purchases: int = MIN_USER_PURCHASES,  # 用户最少购买次数
+    max_user_history: int = MAX_USER_HISTORY,  # 每用户保留最近 N 条购买记录
 ) -> pd.DataFrame:  # 返回含 RecBole 字段名的 DataFrame
     path = path or _default_input_path()  # 解析默认输入路径
     df = pd.read_csv(  # 读取交易 CSV
@@ -53,6 +57,15 @@ def load_transactions(  # 加载并预处理交易为 RecBole 列格式
     df = df[df["customer_id"].isin(valid_users)]  # 只保留有效用户
 
     df = df.sort_values(["customer_id", "t_dat"])  # 按用户和时间排序
+    before_truncate = len(df)  # 截断前行数
+    df = df.groupby("customer_id", sort=False).tail(max_user_history)  # 每用户只保留最近 N 条
+    truncated_rows = before_truncate - len(df)  # 被截断删除的行数
+    if truncated_rows > 0:  # 有截断时打印统计
+        print(
+            f"Truncated to last {max_user_history} purchases per user "
+            f"({truncated_rows:,} rows removed)"
+        )
+
     df["timestamp"] = (df["t_dat"] - pd.Timestamp("1970-01-01")) // pd.Timedelta(seconds=1)  # 转为 Unix 秒时间戳
 
     out = pd.DataFrame(  # 构造 RecBole 标准列名 DataFrame
@@ -70,6 +83,7 @@ def build_inter_file(  # 构建并保存 hm.inter 文件
     output_path: Path | None = None,  # 输出 inter 路径
     weeks: int = WEEKS,  # 时间窗口周数
     min_user_purchases: int = MIN_USER_PURCHASES,  # 用户最少购买次数
+    max_user_history: int = MAX_USER_HISTORY,  # 每用户保留最近 N 条购买记录
 ) -> Path:  # 返回输出文件路径
     output_path = output_path or INTER_FILE  # 默认输出路径
     output_path.parent.mkdir(parents=True, exist_ok=True)  # 创建输出目录
@@ -78,6 +92,7 @@ def build_inter_file(  # 构建并保存 hm.inter 文件
         path=transactions_path,  # 输入路径
         weeks=weeks,  # 周数
         min_user_purchases=min_user_purchases,  # 最少购买次数
+        max_user_history=max_user_history,  # 每用户历史上限
     )  # 结束 load_transactions 调用
     out.to_csv(output_path, sep="\t", index=False)  # 以制表符分隔写入
     print(f"saved: {output_path}")  # 打印保存路径
@@ -92,6 +107,7 @@ def main() -> None:  # CLI 入口
     parser.add_argument("--output-path", type=Path, default=INTER_FILE)  # 输出路径参数
     parser.add_argument("--weeks", type=int, default=WEEKS)  # 周数参数
     parser.add_argument("--min-user-purchases", type=int, default=MIN_USER_PURCHASES)  # 最少购买次数参数
+    parser.add_argument("--max-user-history", type=int, default=MAX_USER_HISTORY)  # 每用户历史上限参数
     args = parser.parse_args()  # 解析命令行参数
 
     build_inter_file(  # 构建 inter 文件
@@ -99,6 +115,7 @@ def main() -> None:  # CLI 入口
         output_path=args.output_path,  # 传入输出路径
         weeks=args.weeks,  # 传入周数
         min_user_purchases=args.min_user_purchases,  # 传入最少购买次数
+        max_user_history=args.max_user_history,  # 传入每用户历史上限
     )  # 结束 build_inter_file 调用
 
 

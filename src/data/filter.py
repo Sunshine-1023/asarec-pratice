@@ -8,12 +8,14 @@ from pathlib import Path  # 路径对象
 import pandas as pd  # 数据处理
 
 
+
+
 RAW_DIR = Path("data/raw")  # 原始数据目录
 FILTERED_DIR = Path("data/raw/filtered")  # 过滤后数据输出目录
 
 TOP_ITEMS = 30_000  # 保留的热门商品数量上限
 MIN_USER_PURCHASES = 5  # 用户最少购买次数阈值
-MAX_USER_BEHAVIORS = 50  # 每用户保留的最大行为条数
+MAX_USER_BEHAVIORS = 100  # 每用户保留的最大行为条数（与序列模型 MAX_ITEM_LIST_LENGTH 对齐）
 WEEKS = 6  # 时间窗口周数（与 split 的 total_weeks 一致）
 CHUNK_SIZE = 500_000  # 分块读取 CSV 的行数
 

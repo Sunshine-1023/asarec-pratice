@@ -9,6 +9,7 @@ from typing import Literal  # 导入字面量类型
 
 import pandas as pd  # 导入 pandas 数据分析库
 
+MAX_USER_HISTORY = 100  # 每用户保留的最大历史条数（与序列模型 MAX_ITEM_LIST_LENGTH 对齐）
 
 ActivityTier = Literal["high", "medium", "low", "cold_start"]  # 用户活跃度分层
 
@@ -55,8 +56,11 @@ def infer_sequence_channel(recall_csv: str | Path) -> str:  # 从召回文件名
     return "sasrec"  # 默认 SASRec
 
 
-def build_user_history(*inter_paths: str | Path) -> dict[str, list[str]]:  # 从交互文件构建用户历史
-    """Build per-user ordered history from one or more .inter files."""  # 从一个或多个 .inter 文件构建按时间排序的用户历史
+def build_user_history(
+    *inter_paths: str | Path,
+    max_user_history: int = MAX_USER_HISTORY,
+) -> dict[str, list[str]]:
+    """Build per-user ordered history from one or more .inter files."""
     frames = []  # 初始化 DataFrame 列表
     for path in inter_paths:  # 遍历每个交互文件路径
         df = pd.read_csv(path, sep="\t", usecols=["user_id:token", "item_id:token", "timestamp:float"])  # 读取用户、物品与时间戳列
@@ -65,10 +69,16 @@ def build_user_history(*inter_paths: str | Path) -> dict[str, list[str]]:  # 从
     merged = merged.sort_values(["user_id:token", "timestamp:float"])  # 按用户与时间戳排序
     history = (  # 构建用户到物品序列的映射
         merged.groupby("user_id:token")["item_id:token"]  # 按用户分组并取物品列
-        .apply(lambda s: [str(x) for x in s.tolist()])  # 将每组物品转为字符串列表
+        .apply(lambda s: [str(x) for x in s.tolist()[-max_user_history:]])  # 每用户只保留最近 N 条
         .to_dict()  # 转为字典
     )  # 结束历史映射构建
     return history  # 返回用户历史字典
+
+
+def normalize_item_id(item_id: str) -> str:  # 统一 item_id 格式（hm 与 hm_seq/RecBole 导出）
+    """Strip leading zeros from numeric IDs so hm_seq tokens match hm.inter labels."""
+    s = str(item_id).strip()
+    return str(int(s)) if s.isdigit() else s
 
 
 def load_channel_recall_csv(  # 加载单通道召回 CSV 文件
@@ -88,7 +98,7 @@ def load_channel_recall_csv(  # 加载单通道召回 CSV 文件
         reader = csv.DictReader(f)  # 创建字典形式 CSV 读取器
         for row in reader:  # 逐行读取召回记录
             uid = str(row[user_col])  # 读取并规范化用户 ID
-            iid = str(row[item_col])  # 读取并规范化物品 ID
+            iid = normalize_item_id(row[item_col])  # 读取并规范化物品 ID
             score = float(row.get(score_col, 0.0))  # 读取分数，缺失时默认为 0.0
             rank = int(row.get(rank_col, 999999))  # 读取排名，缺失时默认为 999999
             rows_by_user[uid].append((iid, score, rank))  # 追加当前用户的候选三元组

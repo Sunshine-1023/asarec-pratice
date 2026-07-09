@@ -5,9 +5,15 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import sys
 from itertools import product
 from pathlib import Path
 from typing import Any
+
+if __package__ is None or __package__ == "":
+    project_root = Path(__file__).resolve().parents[2]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
 
 from src.fusion.weighted_fusion import ACTIVITY_WEIGHTS, ActivityTier
 from src.evaluate.offline_eval import (

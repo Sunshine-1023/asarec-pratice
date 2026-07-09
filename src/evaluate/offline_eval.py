@@ -7,11 +7,17 @@ import copy  # 深拷贝权重模板
 import csv  # 导入 CSV 读写模块
 import json  # 导入 JSON 序列化模块
 import math  # 导入数学函数库
+import sys  # 导入系统模块用于路径注入
 from collections import defaultdict  # 导入带默认值的字典
 from dataclasses import dataclass  # 融合评估上下文
 from pathlib import Path  # 导入路径处理类
 
 import pandas as pd  # 导入 pandas 数据分析库
+
+if __package__ is None or __package__ == "":  # 若以脚本方式直接运行
+    project_root = Path(__file__).resolve().parents[2]  # 定位项目根目录
+    if str(project_root) not in sys.path:  # 若根目录不在搜索路径中
+        sys.path.insert(0, str(project_root))  # 注入项目根目录到 sys.path
 
 from src.fusion.weighted_fusion import (  # 导入融合相关函数
     ACTIVITY_WEIGHTS,  # 默认活跃度权重模板

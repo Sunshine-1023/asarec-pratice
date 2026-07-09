@@ -11,6 +11,7 @@ def patch_numpy_for_recbole() -> None:  # 为 RecBole 恢复 NumPy 2.x 中已移
 
     np.float = np.float64  # 将 np.float 映射到 float64
     np.int = np.int64  # 将 np.int 映射到 int64
+    np.long = np.int64  # 将 np.long 映射到 int64（NumPy 2.x 已移除）
     np.bool = np.bool_  # 将 np.bool 映射到 bool_
     np.object = object  # 将 np.object 映射到内置 object
     np.str = str  # 将 np.str 映射到内置 str
