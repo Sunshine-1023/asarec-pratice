@@ -13,7 +13,7 @@ seq_separator: " "  # 序列内商品 ID 的分隔符（空格）
 
 load_col:  # 从 benchmark split 文件加载的列
   inter: [user_id, item_id_list, item_length, item_id, timestamp]  # 序列交互字段
-  item: [item_id, product_type_name, product_group_name, colour_group_name, section_name, garment_group_name]  # 商品特征字段
+  item: [item_id, product_type_name, product_group_name, colour_group_name, section_name, garment_group_name, department_name, index_name, index_group_name]  # 商品特征字段
 
 eval_args:  # 评估设置
   order: TO  # 按时间顺序排列（Temporal Order）
@@ -24,10 +24,10 @@ benchmark_filename: [train, valid, test]  # 固定使用 train/valid/test benchm
 
 metrics: ['MAP', 'Recall', 'NDCG', 'MRR', 'Hit', 'Precision']  # 训练过程中计算的指标
 topk: [12]  # Top-K 评估（与 H&M 竞赛 K=12 一致）
-valid_metric: NDCG@12  # 早停与选最优 checkpoint 的验证指标
+valid_metric: MAP@12  # 早停与选最优 checkpoint 的验证指标
 
 model: SASRecF  # 使用带商品特征的 SASRecF 模型
-selected_features: [product_type_name, product_group_name, colour_group_name, section_name, garment_group_name]  # 使用的商品类别特征
+selected_features: [product_type_name, product_group_name, colour_group_name, section_name, garment_group_name, department_name, index_name, index_group_name]  # 使用的商品类别特征
 pooling_mode: sum  # 多个特征 embedding 的聚合方式
 
 hidden_size: 128  # Transformer 隐藏层维度
@@ -43,7 +43,7 @@ MAX_ITEM_LIST_LENGTH: 100  # 用户历史序列最大长度
 loss_type: CE  # 损失函数（交叉熵）
 
 epochs: 50  # 最大训练轮数
-train_batch_size: 2048  # 训练 batch 大小（8GB 显存友好）
+train_batch_size: 1024  # 训练 batch 大小（更稳健）
 eval_batch_size: 2048  # 评估 batch 大小
 learning_rate: 0.0005  # 学习率
 eval_step: 1  # 每 N 个 epoch 做一次验证
