@@ -71,12 +71,12 @@
           └─ RecBole 訓練 SASRec 30 epoch (~94 min)
 [19:08] 訓練結束，自動 test 評估失敗（torch.load）
           └─ checkpoint 已保存 ✅
-[後續]  python run_sasrec_test.py --eval-split test
+[後續]  python run_sasrec.py --config configs/sasrec.yaml --skip-preprocess
           → test MAP@12 = 0.0154
-[後續]  python run_recbole_channel_eval.py
-          → Pop=0.0033, ItemKNN=0.0087
-[後續]  python run_recbole_fusion_eval.py
-          → valid 8 組網格搜權 → test Fusion MAP@12 = 0.0157
+[後續]  python run_rule_recall.py --eval-split both
+          → 匯出規則三路召回 CSV（popular/category_popular/item2item）
+[後續]  python run_fusion_weight_search.py + python run_offline_eval.py --eval-split test --weights-json outputs/evaluation/best_fusion_weights.json
+          → valid 搜權後固定到 test，離線 Fusion MAP@12 = 0.0205
 [並行]  offline 召回 CSV + run_fusion_eval（非本報告主口徑）
 ```
 
@@ -120,7 +120,7 @@
 
 | 項目 | 第一版 RecBole 融合 | 第二版 Offline 融合 |
 |------|---------------------|---------------------|
-| 實現 | `run_recbole_fusion_eval.py` | `offline_eval.py` + `weight_search.py` |
+| 實現 | （歷史腳本已移除） | `run_fusion_weight_search.py` + `run_offline_eval.py` |
 | 融合對象 | 三路 **full-ranking 分數** | 各路 **Top-K 候選 rank** |
 | 公式 | 線性分數加權 | `w × 1/(rank+1)` 累加 |
 | 搜權 | valid 8 組固定網格 | 分 4 活躍度層 × 座標下降（~335 組/層） |
@@ -179,9 +179,10 @@
 ```bash
 conda activate dl
 python run_sasrec.py
-python run_sasrec_test.py --eval-split test
-python run_recbole_channel_eval.py
-python run_recbole_fusion_eval.py
+python run_sasrec.py --config configs/sasrec.yaml --skip-preprocess
+python run_rule_recall.py --eval-split both
+python run_fusion_weight_search.py
+python run_offline_eval.py --eval-split test --weights-json outputs/evaluation/best_fusion_weights.json
 ```
 
 ### 第二版（Offline 融合主口徑）
@@ -195,9 +196,9 @@ python src/data/build_item_features.py
 python run_sasrecf.py
 python run_sasrecf_recall.py --eval-split valid
 python run_sasrecf_recall.py --eval-split test
-python src/evaluate/offline_eval.py --eval-split valid
-python src/evaluate/weight_search.py
-python src/evaluate/offline_eval.py --eval-split test --weights-json outputs/evaluation/best_fusion_weights.json
+python run_offline_eval.py --eval-split valid
+python run_fusion_weight_search.py
+python run_offline_eval.py --eval-split test --weights-json outputs/evaluation/best_fusion_weights.json
 ```
 
 ---

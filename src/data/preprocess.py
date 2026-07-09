@@ -61,10 +61,10 @@ def load_transactions(  # 加载并预处理交易为 RecBole 列格式
     df = df.groupby("customer_id", sort=False).tail(max_user_history)  # 每用户只保留最近 N 条
     truncated_rows = before_truncate - len(df)  # 被截断删除的行数
     if truncated_rows > 0:  # 有截断时打印统计
-        print(
-            f"Truncated to last {max_user_history} purchases per user "
-            f"({truncated_rows:,} rows removed)"
-        )
+        print(  # 打印截断统计信息
+            f"Truncated to last {max_user_history} purchases per user "  # 截断说明前缀
+            f"({truncated_rows:,} rows removed)"  # 删除行数
+        )  # 结束截断统计打印
 
     df["timestamp"] = (df["t_dat"] - pd.Timestamp("1970-01-01")) // pd.Timedelta(seconds=1)  # 转为 Unix 秒时间戳
 

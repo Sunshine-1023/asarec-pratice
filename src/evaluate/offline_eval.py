@@ -115,7 +115,7 @@ def map_at_k(actual: set[str], pred: list[str], k: int) -> float:  # 公开 MAP@
     return _map_at_k(actual, pred, k)  # 复用内部实现
 
 
-@dataclass
+@dataclass  # 数据类装饰器
 class FusionEvalContext:  # 预计算召回候选，供权重搜索复用
     targets: dict[str, set[str]]  # 用户真实标签
     users: list[dict]  # 每用户 history / channel_candidates
@@ -124,105 +124,105 @@ class FusionEvalContext:  # 预计算召回候选，供权重搜索复用
 
 
 def build_fusion_eval_context(  # 构建融合评估上下文（召回只算一次）
-    eval_split: str = "valid",
-    recall_top_k: int = 100,
-    popular_recall_top_k: int = POPULAR_RECALL_TOP_K,
-    category_popular_recall_top_k: int = CATEGORY_POPULAR_RECALL_TOP_K,
-    item2item_recall_top_k: int = ITEM2ITEM_RECALL_TOP_K,
-    item2item_cooccur_weeks: int = COOCCUR_WEEKS,
-    item2item_top_sim_k: int = TOP_SIM_K,
-    item2item_seed_items: int = SEED_ITEMS,
-    category_popular_seed_items: int = CATEGORY_SEED_ITEMS,
-    final_top_k: int = 12,
-    sasrec_recall_csv: str | Path | None = None,
-    sequence_channel: str | None = None,
-) -> FusionEvalContext:
-    if eval_split not in {"valid", "test"}:
-        raise ValueError("eval_split must be 'valid' or 'test'")
+    eval_split: str = "valid",  # 评估划分：valid 或 test
+    recall_top_k: int = 100,  # 序列模型召回 Top-K
+    popular_recall_top_k: int = POPULAR_RECALL_TOP_K,  # 全局热门召回 Top-K
+    category_popular_recall_top_k: int = CATEGORY_POPULAR_RECALL_TOP_K,  # 类别热门召回 Top-K
+    item2item_recall_top_k: int = ITEM2ITEM_RECALL_TOP_K,  # item2item 召回 Top-K
+    item2item_cooccur_weeks: int = COOCCUR_WEEKS,  # item2item 共现统计窗口（周）
+    item2item_top_sim_k: int = TOP_SIM_K,  # 每个商品保留相似邻居数
+    item2item_seed_items: int = SEED_ITEMS,  # item2item 种子商品数
+    category_popular_seed_items: int = CATEGORY_SEED_ITEMS,  # 类别热门种子商品数
+    final_top_k: int = 12,  # 融合后最终 Top-K
+    sasrec_recall_csv: str | Path | None = None,  # 可选序列模型召回 CSV 路径
+    sequence_channel: str | None = None,  # 序列通道名（sasrec / sasrecf），默认从 CSV 推断
+) -> FusionEvalContext:  # 返回融合评估上下文
+    if eval_split not in {"valid", "test"}:  # 校验评估划分参数
+        raise ValueError("eval_split must be 'valid' or 'test'")  # 非法划分时抛出异常
 
-    sasrec_recall_csv = (
-        Path(sasrec_recall_csv)
-        if sasrec_recall_csv is not None
-        else default_sasrec_recall_csv(eval_split)
-    )
-    eval_path = VALID_INTER if eval_split == "valid" else TEST_INTER
-    history_paths = [TRAIN_INTER] if eval_split == "valid" else [TRAIN_INTER, VALID_INTER]
+    sasrec_recall_csv = (  # 确定序列模型召回文件路径
+        Path(sasrec_recall_csv)  # 若用户提供路径则转为 Path
+        if sasrec_recall_csv is not None  # 判断路径是否非空
+        else default_sasrec_recall_csv(eval_split)  # 否则使用默认路径
+    )  # 结束路径选择
+    eval_path = VALID_INTER if eval_split == "valid" else TEST_INTER  # 选择验证或测试交互文件
+    history_paths = [TRAIN_INTER] if eval_split == "valid" else [TRAIN_INTER, VALID_INTER]  # 选择构建历史所用的交互文件
 
-    user_history_map = build_user_history(*history_paths)
-    targets = _load_targets(eval_path)
-    popular_index = build_popular_index(*history_paths)
-    category_popular_index = build_category_popular_index(history_paths)
-    item2item_index = build_item2item_index(
-        history_paths,
-        cooccur_weeks=item2item_cooccur_weeks,
-        top_sim_k=item2item_top_sim_k,
-    )
-    sasrec_map = load_channel_recall_csv(sasrec_recall_csv)
-    resolved_sequence_channel = sequence_channel or infer_sequence_channel(sasrec_recall_csv)
+    user_history_map = build_user_history(*history_paths)  # 构建用户历史映射
+    targets = _load_targets(eval_path)  # 加载评估集真实标签
+    popular_index = build_popular_index(*history_paths)  # 构建热门召回索引
+    category_popular_index = build_category_popular_index(history_paths)  # 构建类别热门索引
+    item2item_index = build_item2item_index(  # 构建 item2item 共现索引
+        history_paths,  # 传入历史交互文件路径
+        cooccur_weeks=item2item_cooccur_weeks,  # 共现统计窗口
+        top_sim_k=item2item_top_sim_k,  # 相似邻居保留数
+    )  # item2item 索引构建完成
+    sasrec_map = load_channel_recall_csv(sasrec_recall_csv)  # 加载序列模型召回结果
+    resolved_sequence_channel = sequence_channel or infer_sequence_channel(sasrec_recall_csv)  # 推断通道名
 
-    users: list[dict] = []
-    for user_id, actual_items in targets.items():
-        history = user_history_map.get(user_id, [])
-        history_set = set(history)
-        channel_candidates = {
-            "popular": recall_popular(popular_index, user_history=history_set, top_k=popular_recall_top_k),
-            "category_popular": recall_category_popular(
-                history,
-                category_popular_index,
-                seed_items=category_popular_seed_items,
-                top_k=category_popular_recall_top_k,
-            ),
-            "item2item": recall_item2item(
-                history,
-                item2item_index,
-                seed_items=item2item_seed_items,
-                top_k=item2item_recall_top_k,
-            ),
-            resolved_sequence_channel: [
-                (iid, score) for iid, score, _ in sasrec_map.get(user_id, [])[:recall_top_k]
-            ],
-        }
-        users.append(
-            {
-                "user_id": user_id,
-                "actual_items": actual_items,
-                "history": history,
-                "history_set": history_set,
-                "channel_candidates": channel_candidates,
-            }
-        )
+    users: list[dict] = []  # 初始化用户评估数据列表
+    for user_id, actual_items in targets.items():  # 遍历每个评估用户
+        history = user_history_map.get(user_id, [])  # 获取用户历史序列
+        history_set = set(history)  # 转为集合
+        channel_candidates = {  # 组装各通道候选
+            "popular": recall_popular(popular_index, user_history=history_set, top_k=popular_recall_top_k),  # 热门通道召回
+            "category_popular": recall_category_popular(  # 类别热门通道召回
+                history,  # 用户历史序列
+                category_popular_index,  # 类别热门索引
+                seed_items=category_popular_seed_items,  # 种子商品数
+                top_k=category_popular_recall_top_k,  # 召回 Top-K
+            ),  # 类别热门召回完成
+            "item2item": recall_item2item(  # item2item 共现召回
+                history,  # 用户历史序列
+                item2item_index,  # item2item 共现索引
+                seed_items=item2item_seed_items,  # 种子商品数
+                top_k=item2item_recall_top_k,  # 召回 Top-K
+            ),  # item2item 召回完成
+            resolved_sequence_channel: [  # 序列模型通道召回
+                (iid, score) for iid, score, _ in sasrec_map.get(user_id, [])[:recall_top_k]  # 截取 Top-K 候选
+            ],  # 序列模型通道召回结束
+        }  # 通道候选字典结束
+        users.append(  # 追加用户评估数据
+            {  # 用户数据字典
+                "user_id": user_id,  # 用户 ID
+                "actual_items": actual_items,  # 真实标签集合
+                "history": history,  # 历史序列
+                "history_set": history_set,  # 历史集合
+                "channel_candidates": channel_candidates,  # 各通道候选
+            }  # 用户数据字典结束
+        )  # 追加完成
 
-    return FusionEvalContext(
-        targets=targets,
-        users=users,
-        sequence_channel=resolved_sequence_channel,
-        final_top_k=final_top_k,
-    )
+    return FusionEvalContext(  # 构建并返回评估上下文
+        targets=targets,  # 用户真实标签
+        users=users,  # 用户评估数据列表
+        sequence_channel=resolved_sequence_channel,  # 序列模型通道名
+        final_top_k=final_top_k,  # 最终 Top-K
+    )  # 上下文构建完成
 
 
 def evaluate_fusion_map_at_k(  # 给定权重模板计算平均 MAP@K
-    context: FusionEvalContext,
-    activity_weights: dict[ActivityTier, dict[str, float]],
-    exclude_seen: bool = False,
-) -> float:
-    maps: list[float] = []
-    for row in context.users:
-        user_weights = get_channel_weights_for_user(
-            len(row["history"]),
-            context.sequence_channel,
-            activity_weights=activity_weights,
-        )
-        fused = fuse_candidates(
-            user_id=row["user_id"],
-            user_history=row["history_set"],
-            channel_candidates=row["channel_candidates"],
-            channel_weights=user_weights,
-            top_k=context.final_top_k,
-            exclude_seen=exclude_seen,
-        )
-        pred_items = [item_id for item_id, _ in fused]
-        maps.append(_map_at_k(row["actual_items"], pred_items, context.final_top_k))
-    return float(sum(maps) / len(maps)) if maps else 0.0
+    context: FusionEvalContext,  # 预计算的融合评估上下文
+    activity_weights: dict[ActivityTier, dict[str, float]],  # 各分层通道权重模板
+    exclude_seen: bool = False,  # 融合时是否排除历史已购
+) -> float:  # 返回平均 MAP@K
+    maps: list[float] = []  # 初始化各用户 MAP 列表
+    for row in context.users:  # 遍历每个用户
+        user_weights = get_channel_weights_for_user(  # 按历史长度获取用户通道权重
+            len(row["history"]),  # 用户历史长度
+            context.sequence_channel,  # 序列模型通道名
+            activity_weights=activity_weights,  # 传入分层权重模板
+        )  # 权重获取完成
+        fused = fuse_candidates(  # 融合多通道候选
+            user_id=row["user_id"],  # 用户 ID
+            user_history=row["history_set"],  # 用户历史集合
+            channel_candidates=row["channel_candidates"],  # 各通道候选
+            channel_weights=user_weights,  # 通道权重
+            top_k=context.final_top_k,  # 最终 Top-K
+            exclude_seen=exclude_seen,  # 是否排除已购
+        )  # 融合完成
+        pred_items = [item_id for item_id, _ in fused]  # 提取预测物品 ID 列表
+        maps.append(_map_at_k(row["actual_items"], pred_items, context.final_top_k))  # 累计 MAP@K
+    return float(sum(maps) / len(maps)) if maps else 0.0  # 返回平均 MAP@K
 
 
 def evaluate_fusion(  # 执行多通道融合并评估
@@ -319,11 +319,11 @@ def evaluate_fusion(  # 执行多通道融合并评估
         if adaptive_weights:  # 按历史长度自适应权重
             tier = classify_activity_tier(len(history))  # 判定活跃度
             tier_counts[tier] += 1  # 统计分层人数
-            user_weights = get_channel_weights_for_user(
-                len(history),
-                resolved_sequence_channel,
-                activity_weights=weights_table,
-            )
+            user_weights = get_channel_weights_for_user(  # 按历史长度获取用户通道权重
+                len(history),  # 用户历史长度
+                resolved_sequence_channel,  # 序列模型通道名
+                activity_weights=weights_table,  # 传入分层权重表
+            )  # 权重获取完成
         else:  # 全用户统一权重
             user_weights = fixed_weights  # 使用固定权重
 
@@ -376,9 +376,9 @@ def evaluate_fusion(  # 执行多通道融合并评估
         "adaptive_weights": adaptive_weights,  # 是否启用自适应权重
         "exclude_seen": exclude_seen,  # 是否排除已购商品
         "sequence_channel": resolved_sequence_channel,  # 序列模型通道名
-        "activity_weights": (
-            {tier: dict(w) for tier, w in weights_table.items()} if adaptive_weights else None
-        ),
+        "activity_weights": (  # 自适应权重详情
+            {tier: dict(w) for tier, w in weights_table.items()} if adaptive_weights else None  # 各分层权重或 None
+        ),  # 自适应权重详情结束
         "popular_recall_top_k": popular_recall_top_k,  # 热门召回 Top-K
         "category_popular_recall_top_k": category_popular_recall_top_k,  # 类别热门召回 Top-K
         "recall_top_k": recall_top_k,  # 序列模型召回 Top-K
@@ -442,28 +442,28 @@ def main() -> None:  # 命令行入口函数
         action="store_true",  # 布尔开关
         help="Use fixed weights for all users instead of activity-based adaptive weights",  # 帮助文本
     )  # 自适应权重开关结束
-    parser.add_argument(
-        "--exclude-seen",
-        action="store_true",
-        help="Exclude items already in user history from fusion candidates",
-    )
-    parser.add_argument(
-        "--weights-json",
-        type=Path,
-        default=None,
-        help="Load per-tier fusion weights from JSON (e.g. outputs/evaluation/best_fusion_weights.json)",
-    )
+    parser.add_argument(  # 排除已购商品开关
+        "--exclude-seen",  # 参数名
+        action="store_true",  # 布尔开关
+        help="Exclude items already in user history from fusion candidates",  # 帮助文本
+    )  # 排除已购开关结束
+    parser.add_argument(  # 从 JSON 加载分层权重参数
+        "--weights-json",  # 参数名
+        type=Path,  # 路径类型
+        default=None,  # 默认不加载
+        help="Load per-tier fusion weights from JSON (e.g. outputs/evaluation/best_fusion_weights.json)",  # 帮助文本
+    )  # 权重 JSON 参数结束
     args = parser.parse_args()  # 解析命令行参数
 
-    loaded_weights = None
-    exclude_seen = args.exclude_seen
-    if args.weights_json is not None:
-        from src.evaluate.weight_search import load_best_weights
+    loaded_weights = None  # 初始化加载的分层权重
+    exclude_seen = args.exclude_seen  # 默认使用命令行排除已购标志
+    if args.weights_json is not None:  # 若指定了权重 JSON 文件
+        from src.evaluate.weight_search import load_best_weights  # 导入权重加载函数
 
-        payload = load_best_weights(args.weights_json)
-        loaded_weights = payload["best_weights"]
-        if "exclude_seen" in payload and not args.exclude_seen:
-            exclude_seen = bool(payload["exclude_seen"])
+        payload = load_best_weights(args.weights_json)  # 加载最优权重载荷
+        loaded_weights = payload["best_weights"]  # 提取分层权重
+        if "exclude_seen" in payload and not args.exclude_seen:  # 若 JSON 含 exclude_seen 且命令行未指定
+            exclude_seen = bool(payload["exclude_seen"])  # 采用 JSON 中的 exclude_seen 设置
 
     evaluate_fusion(  # 调用融合评估主流程
         eval_split=args.eval_split,  # 传入评估划分

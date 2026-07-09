@@ -366,13 +366,13 @@ python run_sasrecf_recall.py --eval-split valid
 python run_sasrecf_recall.py --eval-split test
 
 # 7. valid 基線融合評估
-python src/evaluate/offline_eval.py --eval-split valid
+python run_offline_eval.py --eval-split valid
 
 # 8. valid 權重搜尋
-python src/evaluate/weight_search.py
+python run_fusion_weight_search.py
 
 # 9. test 最終評估（固定搜權結果）
-python src/evaluate/offline_eval.py --eval-split test --weights-json outputs/evaluation/best_fusion_weights.json
+python run_offline_eval.py --eval-split test --weights-json outputs/evaluation/best_fusion_weights.json
 ```
 
 ---

@@ -1,4 +1,4 @@
-"""Export SASRecF top-100 recall with default config."""  # 使用默认配置导出 SASRecF Top-100 召回结果
+"""Step 3/6 — Export SASRecF Top-100 recall CSV for valid or test."""  # 步骤 3/6：导出 SASRecF Top-100 召回 CSV（valid 或 test）
 
 from __future__ import annotations  # 启用延迟注解评估
 

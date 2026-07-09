@@ -47,7 +47,7 @@ Fusion 最佳權重（valid 網格搜索、test 固定）：`popular=0.2, itemkn
 | 排序 | 對全庫 item full ranking，Top-K = 12 |
 | Pop / ItemKNN | RecBole 內建模型，與 SASRec **共用同一 dataset / token 映射** |
 | Fusion | 三路 **分數線性加權**（非 rank 倒數融合），valid 上 8 組網格搜權 |
-| 實現 | `run_recbole_channel_eval.py`、`run_recbole_fusion_eval.py` |
+| 實現 | （歷史 RecBole 對照腳本已移除）現用 `run_rule_recall.py`、`run_fusion_weight_search.py`、`run_offline_eval.py` |
 
 ### Pop / ItemKNN vs ItemCF
 
@@ -74,15 +74,15 @@ ItemCF 與 ItemKNN 算法相近，但 **僅 ItemKNN 參與 RecBole 統一評估*
 |--------------|----------|
 | SASRec valid | 訓練日誌 epoch 28（`SASRec-hm_seq-Jul-08-2026_training_report.md`） |
 | SASRec test | `outputs/evaluation/sasrec_test_metrics.json` |
-| Pop / ItemKNN test | `run_recbole_channel_eval.py` → `recbole_channel_metrics.json`（MAP 見上表） |
-| Fusion valid / test | `outputs/evaluation/recbole_fusion_weight_search.json` |
+| 規則三路召回導出 | `run_rule_recall.py --eval-split both` → `outputs/recommendations/*_{valid,test}.csv` |
+| Fusion valid / test | `run_fusion_weight_search.py` + `run_offline_eval.py` → `fusion_{valid,test}_metrics.json` |
 | SASRec 匯總 | `outputs/evaluation/sasrec_recbole_metrics.json` |
 
 ---
 
 ## 與 Offline 口徑的關係
 
-專案另有 **offline 召回–融合評估**（`run_channel_eval.py` / `run_fusion_eval.py`），協議為：
+專案目前使用 **offline 召回–融合評估**（`run_rule_recall.py` / `run_offline_eval.py`），協議為：
 
 - 各通道先召回 Top-100，再 rank 融合 Top-12
 - 歷史 = 過去切分（valid 用 train；test 用 train+valid）
@@ -107,8 +107,9 @@ ItemCF 與 ItemKNN 算法相近，但 **僅 ItemKNN 參與 RecBole 統一評估*
 
 ```bash
 conda activate dl
-python run_recbole_channel_eval.py      # Pop / ItemKNN / SASRec
-python run_recbole_fusion_eval.py       # Fusion 網格搜權 + test
+python run_rule_recall.py --eval-split both
+python run_fusion_weight_search.py
+python run_offline_eval.py --eval-split test --weights-json outputs/evaluation/best_fusion_weights.json
 ```
 
 ---

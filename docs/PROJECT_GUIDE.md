@@ -115,7 +115,7 @@ FashionRec-Transformer/
 │   └── evaluate/                 # 离线评估 & 权重搜索
 ├── run_sasrecf.py                # 训练 SASRecF 入口
 ├── run_sasrecf_recall.py         # 导出 SASRecF 召回
-├── run_weight_search.py          # valid 权重搜索入口
+├── run_fusion_weight_search.py   # valid 权重搜索入口
 └── docs/
     └── PROJECT_GUIDE.md          # 本文档
 ```
@@ -568,7 +568,7 @@ AP@12 = (0.5 + 0.4) / min(2, 12) = 0.9 / 2 = 0.45
 ### 10.2 入口
 
 ```bash
-python run_weight_search.py
+python run_fusion_weight_search.py
 # 或
 python -m src.evaluate.weight_search --eval-split valid
 ```
@@ -611,7 +611,7 @@ python -m src.evaluate.weight_search --eval-split valid
 ### 11.1 环境安装
 
 ```bash
-conda activate ai          # 你的 Python 环境
+conda activate dl          # 你的 Python 环境
 pip install -r requirements.txt
 ```
 
@@ -634,14 +634,14 @@ python run_sasrecf_recall.py --eval-split valid
 python run_sasrecf_recall.py --eval-split test
 
 # ── 第 4 步：valid 权重搜索 ──
-python run_weight_search.py
+python run_fusion_weight_search.py
 
 # ── 第 5 步：离线评估 ──
 # valid：看调参效果
-python -m src.evaluate.offline_eval --eval-split valid
+python run_offline_eval.py --eval-split valid
 
 # test：最终成绩（用搜索到的权重）
-python -m src.evaluate.offline_eval \
+python run_offline_eval.py \
   --eval-split test \
   --weights-json outputs/evaluation/best_fusion_weights.json
 ```
@@ -654,8 +654,8 @@ python -m src.evaluate.offline_eval \
 python run_sasrecf.py
 python run_sasrecf_recall.py --eval-split valid
 python run_sasrecf_recall.py --eval-split test
-python run_weight_search.py
-python -m src.evaluate.offline_eval --eval-split test \
+python run_fusion_weight_search.py
+python run_offline_eval.py --eval-split test \
   --weights-json outputs/evaluation/best_fusion_weights.json
 ```
 
@@ -669,8 +669,8 @@ python -m src.evaluate.offline_eval --eval-split test \
 | 商品特征 | （训练时自动） | `src/data/build_item_features.py` |
 | 训练 | `python run_sasrecf.py` | `run_sasrec.py` + `configs/sasrecf.yaml` |
 | SASRecF 召回 | `python run_sasrecf_recall.py` | `src/recall/sasrec_recall.py` |
-| 权重搜索 | `python run_weight_search.py` | `src/evaluate/weight_search.py` |
-| 融合评估 | `python -m src.evaluate.offline_eval` | `src/evaluate/offline_eval.py` |
+| 权重搜索 | `python run_fusion_weight_search.py` | `src/evaluate/weight_search.py` |
+| 融合评估 | `python run_offline_eval.py` | `src/evaluate/offline_eval.py` |
 | 融合逻辑 | （评估时自动） | `src/fusion/weighted_fusion.py` |
 
 ---

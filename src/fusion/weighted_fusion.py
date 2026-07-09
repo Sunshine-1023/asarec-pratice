@@ -37,7 +37,7 @@ def get_channel_weights_for_user(  # 按用户历史长度返回通道权重
     sequence_channel: str = "sasrec",  # 序列模型通道名
     activity_weights: dict[ActivityTier, dict[str, float]] | None = None,  # 可选自定义分层权重
 ) -> dict[str, float]:  # 返回各通道权重字典
-    """Return per-user fusion weights; sequence channel key matches sasrec or sasrecf."""
+    """Return per-user fusion weights; sequence channel key matches sasrec or sasrecf."""  # 返回每用户融合权重，序列通道键与 sasrec 或 sasrecf 对应
     weights_table = activity_weights or ACTIVITY_WEIGHTS  # 使用自定义或默认权重表
     tier = classify_activity_tier(history_len)  # 判定活跃度分层
     template = weights_table[tier]  # 取对应权重模板
@@ -56,11 +56,11 @@ def infer_sequence_channel(recall_csv: str | Path) -> str:  # 从召回文件名
     return "sasrec"  # 默认 SASRec
 
 
-def build_user_history(
-    *inter_paths: str | Path,
-    max_user_history: int = MAX_USER_HISTORY,
-) -> dict[str, list[str]]:
-    """Build per-user ordered history from one or more .inter files."""
+def build_user_history(  # 从交互文件构建每用户有序历史
+    *inter_paths: str | Path,  # 一个或多个 .inter 文件路径
+    max_user_history: int = MAX_USER_HISTORY,  # 每用户最多保留的历史条数
+) -> dict[str, list[str]]:  # 返回用户 ID 到物品序列的映射
+    """Build per-user ordered history from one or more .inter files."""  # 从一个或多个 .inter 文件构建每用户有序历史
     frames = []  # 初始化 DataFrame 列表
     for path in inter_paths:  # 遍历每个交互文件路径
         df = pd.read_csv(path, sep="\t", usecols=["user_id:token", "item_id:token", "timestamp:float"])  # 读取用户、物品与时间戳列
@@ -76,9 +76,9 @@ def build_user_history(
 
 
 def normalize_item_id(item_id: str) -> str:  # 统一 item_id 格式（hm 与 hm_seq/RecBole 导出）
-    """Strip leading zeros from numeric IDs so hm_seq tokens match hm.inter labels."""
-    s = str(item_id).strip()
-    return str(int(s)) if s.isdigit() else s
+    """Strip leading zeros from numeric IDs so hm_seq tokens match hm.inter labels."""  # 去除数字 ID 前导零，使 hm_seq 与 hm.inter 标签一致
+    s = str(item_id).strip()  # 转为字符串并去除首尾空白
+    return str(int(s)) if s.isdigit() else s  # 数字 ID 去前导零，非数字原样返回
 
 
 def load_channel_recall_csv(  # 加载单通道召回 CSV 文件
@@ -116,7 +116,7 @@ def fuse_candidates(  # 对多通道候选进行加权融合
     top_k: int = 12,  # 最终返回的 Top-K 数量
     exclude_seen: bool = False,  # 是否排除历史已购商品
 ) -> list[tuple[str, float]]:  # 返回融合后的 (物品, 分数) 列表
-    """Weighted rank fusion: weight * (1 / (rank + 1)), summed over channels."""
+    """Weighted rank fusion: weight * (1 / (rank + 1)), summed over channels."""  # 加权倒数排名融合：各通道 weight * (1/(rank+1)) 求和
     history = {str(x) for x in user_history} if exclude_seen else set()  # 按需构建历史过滤集合
     merged_scores: dict[str, float] = defaultdict(float)  # 初始化融合得分字典
 
@@ -127,7 +127,7 @@ def fuse_candidates(  # 对多通道候选进行加权融合
         for rank, (item_id, _) in enumerate(candidates):  # 按排名遍历通道候选
             item_id = str(item_id)  # 规范化物品 ID
             if item_id in history:  # 排除已购（可选）
-                continue
+                continue  # 跳过历史已购物品
             merged_scores[item_id] += w * (1.0 / (rank + 1))  # 累加加权倒数排名得分
 
     ranked = sorted(merged_scores.items(), key=lambda x: (-x[1], x[0]))  # 得分降序、ID 升序去重

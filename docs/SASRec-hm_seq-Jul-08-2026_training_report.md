@@ -18,7 +18,7 @@
 - **30 / 30 epoch 全部完成**
 - **未触发早停**（`stopping_step=5`，valid NDCG@12 在后期仍有提升）
 - 训练结束后 RecBole 自动 test 评估因 PyTorch 2.6+ `torch.load(weights_only=True)` 报错中断
-- **模型已成功保存**；后续已通过 `run_sasrec_test.py` 补跑 test 评估
+- **模型已成功保存**；后续采用 `run_sasrec.py --config configs/sasrec.yaml --skip-preprocess` 重跑评估
 
 ---
 
@@ -132,7 +132,7 @@
 | MAP@12 | 0.0180 | 24、26、27、28、29 |
 | Hit@12 | **0.0398** | 28 |
 
-### Test（后续补跑，`run_sasrec_test.py`）
+### Test（后续补跑，历史 test-only 入口已移除）
 
 来源：`outputs/evaluation/sasrec_test_metrics.json`
 
@@ -193,7 +193,7 @@ _pickle.UnpicklingError: Weights only load failed
 ### 补跑 Test 评估
 
 ```bash
-python run_sasrec_test.py --eval-split test
+python run_sasrec.py --config configs/sasrec.yaml --skip-preprocess
 ```
 
 ---

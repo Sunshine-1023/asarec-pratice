@@ -42,7 +42,7 @@
 | 協議 | 對全部 item 打分，取 Top-12 |
 | 歷史構造 | RecBole benchmark 序列任務內建 |
 | 用途 | SASRec 訓練、早停、Pop / ItemKNN / Fusion 統一對比 |
-| 實現 | `run_recbole_channel_eval.py`、`run_recbole_fusion_eval.py` |
+| 實現 | （歷史 RecBole 對照腳本已移除）現用 `run_rule_recall.py`、`run_fusion_weight_search.py`、`run_offline_eval.py` |
 
 > 專案另有 offline 召回–融合評估（Top-100 候選池再融合），其 MAP 與 RecBole **不可直接橫比**；本報告不以其作為主結論。
 
@@ -199,7 +199,7 @@ ItemCF 關鍵參數（第一版）：
 
 ### 3.4 加權 Rank 融合
 
-- **實現**：`src/fusion/weighted_fusion.py`（Offline 召回融合）；RecBole 融合見 `run_recbole_fusion_eval.py`（分數加權，本報告 MAP 來源）。
+- **實現**：`src/fusion/weighted_fusion.py`（Offline 召回融合）；目前可运行流程为 `run_fusion_weight_search.py` + `run_offline_eval.py`。
 - **Offline 公式**（僅供召回管線參考，非本報告 MAP 口徑）：
 
 \[
@@ -215,7 +215,7 @@ ItemCF 關鍵參數（第一版）：
 | itemknn | 0.4 |
 | sasrec | 0.4 |
 
-**RecBole 融合搜權細節**（`run_recbole_fusion_eval.py` → `recbole_fusion_weight_search.json`）：
+**融合搜權細節**（`run_fusion_weight_search.py` → `best_fusion_weights.json`）：
 
 | 項目 | 說明 |
 |------|------|
@@ -339,7 +339,7 @@ Fusion   0.0157
 - **Loss**：全庫 CE，約 15001 類；隨機基線 CE ≈ ln(15001) ≈ **9.62**。
 - Epoch 0 平均 batch CE ≈ 9252/1125 ≈ **8.22**；Epoch 29 ≈ **6.90**。
 - **Checkpoint 選擇依據**：valid **NDCG@12** 最高（epoch 28，0.0230），非 MAP@12。
-- Test MAP@12=0.0154 來自該 checkpoint 的 RecBole full-sort 評估（`run_sasrec_test.py` 補跑）。
+- Test MAP@12=0.0154 來自該 checkpoint 的歷史 RecBole full-sort 評估（原 test-only 入口已移除）。
 
 ### 10.2 異常與補跑
 
@@ -347,7 +347,7 @@ Fusion   0.0157
 |------|------|
 | 訓練末尾 test 評估失敗 | PyTorch 2.6+ `torch.load(weights_only=True)` 與 RecBole checkpoint 不兼容 |
 | 修復 | `src/pytorch_compat.py` 補丁 |
-| 補跑命令 | `python run_sasrec_test.py --eval-split test` |
+| 現有可用命令 | `python run_sasrec.py --config configs/sasrec.yaml --skip-preprocess`（会重训并评估） |
 
 ### 10.3 第一版未覆蓋但第二版已做的改進
 
@@ -379,15 +379,16 @@ python -m src.data.split
 python run_sasrec.py
 
 # 3) 補跑 RecBole test（若訓練末尾 evaluate 失敗）
-python run_sasrec_test.py --eval-split test
+python run_sasrec.py --config configs/sasrec.yaml --skip-preprocess
 
 # 4) 匯出 SASRec 召回
 python -m src.recall.sasrec_recall --eval-split valid --top-k 100
 python -m src.recall.sasrec_recall --eval-split test --top-k 100
 
 # 5) RecBole 統一口徑評估（本報告 MAP@12 來源）
-python run_recbole_channel_eval.py
-python run_recbole_fusion_eval.py
+python run_rule_recall.py --eval-split both
+python run_fusion_weight_search.py
+python run_offline_eval.py --eval-split test --weights-json outputs/evaluation/best_fusion_weights.json
 ```
 
 ---

@@ -1,4 +1,4 @@
-"""Convenience entrypoint for training SASRecF with default config."""  # 使用默认配置训练 SASRecF 的便捷入口脚本
+"""Step 2/6 — Train SASRecF with default config (configs/sasrecf.yaml)."""  # 步骤 2/6：使用默认配置训练 SASRecF
 
 from __future__ import annotations  # 启用延迟注解评估
 
