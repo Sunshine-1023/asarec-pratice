@@ -42,7 +42,7 @@ def filter_transactions(  # 过滤交易记录并写入 CSV
 
     print(f"Reading {input_path} ...")  # 打印读取提示
 
-    # Pass 1: find date cutoff from last N weeks  # 第一遍：确定最近 N 周的日期下界
+    # 第一遍：确定最近 N 周的日期下界
     max_date = None  # 全局最大日期，初始为空
     for chunk in pd.read_csv(input_path, usecols=["t_dat"], chunksize=CHUNK_SIZE):  # 分块只读日期列
         chunk_max = pd.to_datetime(chunk["t_dat"]).max()  # 当前块的最大日期
@@ -51,7 +51,7 @@ def filter_transactions(  # 过滤交易记录并写入 CSV
     cutoff = _week_window_start(max_date, weeks)  # 计算时间窗口起始日期
     print(f"Date range: {cutoff.date()} ~ {max_date.date()} (last {weeks} weeks)")  # 打印日期范围
 
-    # Pass 2: count item purchases in the time window  # 第二遍：统计窗口内各商品购买次数
+    # 第二遍：统计窗口内各商品购买次数
     item_counts: dict[str, int] = {}  # 商品 ID 到购买次数的映射
     for chunk in pd.read_csv(input_path, chunksize=CHUNK_SIZE):  # 分块读取完整交易
         chunk["t_dat"] = pd.to_datetime(chunk["t_dat"])  # 转换日期列
@@ -67,10 +67,10 @@ def filter_transactions(  # 过滤交易记录并写入 CSV
         .sort_values(ascending=False)  # 按次数降序排列
         .head(top_items)  # 取前 top_items 个
         .index  # 取索引即商品 ID
-    }
+    }  # 结束 top_item_ids 集合推导
     print(f"Top {top_items} items selected (unique items in window: {len(item_counts):,})")  # 打印热门商品统计
 
-    # Pass 3: count user purchases after item filter  # 第三遍：在商品过滤后统计用户购买次数
+    # 第三遍：在商品过滤后统计用户购买次数
     user_counts: dict[str, int] = {}  # 用户 ID 到购买次数的映射
     for chunk in pd.read_csv(input_path, chunksize=CHUNK_SIZE):  # 分块读取交易
         chunk["t_dat"] = pd.to_datetime(chunk["t_dat"])  # 转换日期列
@@ -83,13 +83,13 @@ def filter_transactions(  # 过滤交易记录并写入 CSV
 
     active_user_ids = {  # 购买次数达到阈值的用户 ID 集合
         user_id for user_id, count in user_counts.items() if count >= min_user_purchases  # 过滤低活跃用户
-    }
+    }  # 结束 active_user_ids 集合推导
     print(  # 打印活跃用户统计
         f"Active users (>={min_user_purchases} purchases): "  # 活跃用户数量前缀
         f"{len(active_user_ids):,} / {len(user_counts):,}"  # 活跃用户数 / 总用户数
-    )
+    )  # 结束活跃用户统计打印
 
-    # Pass 4: collect filtered transactions  # 第四遍：收集满足全部条件的交易
+    # 第四遍：收集满足全部条件的交易
     filtered_chunks: list[pd.DataFrame] = []  # 存放各过滤后数据块
     for chunk in pd.read_csv(input_path, chunksize=CHUNK_SIZE):  # 分块读取交易
         chunk["t_dat"] = pd.to_datetime(chunk["t_dat"])  # 转换日期列
@@ -110,7 +110,7 @@ def filter_transactions(  # 过滤交易记录并写入 CSV
     df = pd.concat(filtered_chunks, ignore_index=True)  # 合并所有过滤块
     before_truncate = len(df)  # 截断前的行数
 
-    # Pass 5: keep only the most recent N behaviors per user  # 第五遍：每用户只保留最近 N 条行为
+    # 第五遍：每用户只保留最近 N 条行为
     df = df.sort_values(["customer_id", "t_dat"])  # 按用户和日期排序
     df = df.groupby("customer_id", sort=False).tail(max_user_behaviors)  # 每组取最后 max_user_behaviors 行
     df["t_dat"] = df["t_dat"].dt.strftime("%Y-%m-%d")  # 日期格式化为字符串
@@ -120,7 +120,7 @@ def filter_transactions(  # 过滤交易记录并写入 CSV
     print(  # 打印截断统计
         f"Truncated to last {max_user_behaviors} behaviors per user "  # 截断说明前缀
         f"({truncated:,} rows removed)"  # 删除行数
-    )
+    )  # 结束截断统计打印
     print(f"Saved {len(df):,} transactions to {output_path}")  # 打印保存条数
     return output_path  # 返回输出文件路径
 
@@ -137,7 +137,7 @@ def filter_articles(  # 按交易中出现的商品过滤 articles.csv
     item_ids = _normalize_article_id(  # 从交易中提取并规范化商品 ID
         pd.read_csv(transactions_path, usecols=["article_id"], dtype={"article_id": str})[  # 只读 article_id 列
             "article_id"  # 取 Series
-        ]
+        ]  # 结束列索引
     ).unique()  # 去重得到唯一商品 ID
 
     articles = pd.read_csv(input_path, dtype={"article_id": str})  # 读取全部商品表
@@ -185,7 +185,7 @@ def run_filter(  # 依次执行交易、商品、用户三步过滤
         min_user_purchases=min_user_purchases,  # 最少购买次数
         max_user_behaviors=max_user_behaviors,  # 最大行为数
         weeks=weeks,  # 周数
-    )
+    )  # 结束 filter_transactions 调用
     filter_articles(tx_path, input_path=input_dir / "articles.csv", output_dir=output_dir)  # 过滤商品表
     filter_customers(tx_path, input_path=input_dir / "customers.csv", output_dir=output_dir)  # 过滤用户表
     return output_dir  # 返回输出目录
@@ -208,7 +208,7 @@ def main() -> None:  # CLI 入口
         min_user_purchases=args.min_user_purchases,  # 传入最少购买次数
         max_user_behaviors=args.max_user_behaviors,  # 传入最大行为数
         weeks=args.weeks,  # 传入周数
-    )
+    )  # 结束 run_filter 调用
 
 
 if __name__ == "__main__":  # 脚本直接运行时

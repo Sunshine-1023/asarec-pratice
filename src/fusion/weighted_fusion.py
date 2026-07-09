@@ -13,43 +13,45 @@ import pandas as pd  # 导入 pandas 数据分析库
 ActivityTier = Literal["high", "medium", "low", "cold_start"]  # 用户活跃度分层
 
 # 序列模型通道权重模板（sasrec / sasrecf 共用）
-ACTIVITY_WEIGHTS: dict[ActivityTier, dict[str, float]] = {
+ACTIVITY_WEIGHTS: dict[ActivityTier, dict[str, float]] = {  # 各活跃度分层的通道权重模板
     "high": {"sequence": 0.60, "popular": 0.10, "category_popular": 0.10, "item2item": 0.20},  # 历史 >= 10
     "medium": {"sequence": 0.40, "popular": 0.15, "category_popular": 0.15, "item2item": 0.30},  # 历史 3~9
     "low": {"sequence": 0.15, "popular": 0.35, "category_popular": 0.25, "item2item": 0.25},  # 历史 1~2
     "cold_start": {"sequence": 0.00, "popular": 0.55, "category_popular": 0.30, "item2item": 0.15},  # 无历史
-}
+}  # 权重模板字典结束
 
 
 def classify_activity_tier(history_len: int) -> ActivityTier:  # 按历史购买次数划分活跃度
     if history_len <= 0:  # 冷启动
-        return "cold_start"
+        return "cold_start"  # 返回冷启动分层
     if history_len <= 2:  # 低活跃
-        return "low"
+        return "low"  # 返回低活跃分层
     if history_len <= 9:  # 中活跃
-        return "medium"
+        return "medium"  # 返回中活跃分层
     return "high"  # 高活跃（>= 10）
 
 
 def get_channel_weights_for_user(  # 按用户历史长度返回通道权重
-    history_len: int,
-    sequence_channel: str = "sasrec",
-) -> dict[str, float]:
+    history_len: int,  # 用户历史购买次数
+    sequence_channel: str = "sasrec",  # 序列模型通道名
+    activity_weights: dict[ActivityTier, dict[str, float]] | None = None,  # 可选自定义分层权重
+) -> dict[str, float]:  # 返回各通道权重字典
     """Return per-user fusion weights; sequence channel key matches sasrec or sasrecf."""
+    weights_table = activity_weights or ACTIVITY_WEIGHTS  # 使用自定义或默认权重表
     tier = classify_activity_tier(history_len)  # 判定活跃度分层
-    template = ACTIVITY_WEIGHTS[tier]  # 取对应权重模板
+    template = weights_table[tier]  # 取对应权重模板
     return {  # 组装通道权重字典
-        sequence_channel: template["sequence"],
-        "popular": template["popular"],
-        "category_popular": template["category_popular"],
-        "item2item": template["item2item"],
-    }
+        sequence_channel: template["sequence"],  # 序列模型通道权重
+        "popular": template["popular"],  # 热门召回通道权重
+        "category_popular": template["category_popular"],  # 类别热门通道权重
+        "item2item": template["item2item"],  # 商品共现通道权重
+    }  # 权重字典结束
 
 
 def infer_sequence_channel(recall_csv: str | Path) -> str:  # 从召回文件名推断序列通道名
     name = Path(recall_csv).stem.lower()  # 文件名小写
     if name.startswith("sasrecf"):  # SASRecF 召回
-        return "sasrecf"
+        return "sasrecf"  # 返回 sasrecf 通道名
     return "sasrec"  # 默认 SASRec
 
 
@@ -98,13 +100,14 @@ def load_channel_recall_csv(  # 加载单通道召回 CSV 文件
 
 def fuse_candidates(  # 对多通道候选进行加权融合
     user_id: str,  # 当前用户 ID
-    user_history: set[str],  # 用户已交互物品集合
+    user_history: set[str],  # 用户历史商品集合（exclude_seen=True 时用于过滤）
     channel_candidates: dict[str, list[tuple[str, float]]],  # 各通道候选列表
     channel_weights: dict[str, float],  # 各通道权重
     top_k: int = 12,  # 最终返回的 Top-K 数量
+    exclude_seen: bool = False,  # 是否排除历史已购商品
 ) -> list[tuple[str, float]]:  # 返回融合后的 (物品, 分数) 列表
-    """Weighted rank fusion: weight * (1 / (rank + 1)), summed over channels."""  # 加权排名融合：各通道按权重与倒数排名累加得分
-    history = {str(x) for x in user_history}  # 将历史物品统一转为字符串集合
+    """Weighted rank fusion: weight * (1 / (rank + 1)), summed over channels."""
+    history = {str(x) for x in user_history} if exclude_seen else set()  # 按需构建历史过滤集合
     merged_scores: dict[str, float] = defaultdict(float)  # 初始化融合得分字典
 
     for channel, candidates in channel_candidates.items():  # 遍历每个召回通道
@@ -113,9 +116,9 @@ def fuse_candidates(  # 对多通道候选进行加权融合
             continue  # 跳过该通道
         for rank, (item_id, _) in enumerate(candidates):  # 按排名遍历通道候选
             item_id = str(item_id)  # 规范化物品 ID
-            if item_id in history:  # 若物品已在用户历史中
-                continue  # 跳过已交互物品
+            if item_id in history:  # 排除已购（可选）
+                continue
             merged_scores[item_id] += w * (1.0 / (rank + 1))  # 累加加权倒数排名得分
 
-    ranked = sorted(merged_scores.items(), key=lambda x: x[1], reverse=True)  # 按融合得分降序排序
-    return ranked[:top_k]  # 返回 Top-K 融合结果
+    ranked = sorted(merged_scores.items(), key=lambda x: (-x[1], x[0]))  # 得分降序、ID 升序去重
+    return ranked[:top_k]  # 返回 Top-K 融合结果（同 item 只保留一次）

@@ -1,23 +1,23 @@
 """Train SASRec model via RecBole."""  # 通过 RecBole 训练 SASRec 模型的脚本
 
-import argparse
-import csv
-import json
-import re
-from logging import getLogger
-from pathlib import Path
-from collections import defaultdict
+import argparse  # 导入命令行参数解析模块
+import csv  # 导入 CSV 读写模块
+import json  # 导入 JSON 序列化模块
+import re  # 导入正则表达式模块
+from logging import getLogger  # 导入日志记录器获取函数
+from pathlib import Path  # 导入路径处理类
+from collections import defaultdict  # 导入带默认值的字典
 
-import pandas as pd
-import torch
+import pandas as pd  # 导入 pandas 数据分析库
+import torch  # 导入 PyTorch 深度学习框架
 
-from src.pytorch_compat import patch_recbole_compat
+from src.pytorch_compat import patch_recbole_compat  # 导入 RecBole 兼容性补丁
 
-patch_recbole_compat()
+patch_recbole_compat()  # 应用 RecBole 兼容性补丁
 
-from recbole.config import Config
-from recbole.data import create_dataset, data_preparation
-from recbole.utils import get_model, get_trainer, init_logger, init_seed
+from recbole.config import Config  # 导入 RecBole 配置类
+from recbole.data import create_dataset, data_preparation  # 导入数据集创建与划分函数
+from recbole.utils import get_model, get_trainer, init_logger, init_seed  # 导入模型、训练器与日志初始化
 
 from src.data.preprocess import build_inter_file  # 构建交互文件
 from src.data.split import split_by_time  # 按时间划分数据集
@@ -176,58 +176,58 @@ def _select_device() -> torch.device:  # 选择训练设备
     return torch.device("cpu")  # 默认使用 CPU 设备
 
 
-def _patch_tqdm_single_line() -> None:
-    """Force tqdm to update in one terminal line."""
-    try:
-        from tqdm.std import tqdm as tqdm_cls
-    except Exception:
-        return
+def _patch_tqdm_single_line() -> None:  # 强制 tqdm 在单行内更新进度条
+    """Force tqdm to update in one terminal line."""  # 强制 tqdm 在单行终端内更新
+    try:  # 尝试导入 tqdm
+        from tqdm.std import tqdm as tqdm_cls  # 导入 tqdm 标准类
+    except Exception:  # 导入失败则跳过补丁
+        return  # 直接返回
 
-    if getattr(tqdm_cls, "_single_line_patch_applied", False):
-        return
+    if getattr(tqdm_cls, "_single_line_patch_applied", False):  # 若已应用过补丁
+        return  # 避免重复打补丁
 
-    original_init = tqdm_cls.__init__
+    original_init = tqdm_cls.__init__  # 保存原始初始化方法
 
-    def _patched_init(self, *args, **kwargs):
-        kwargs.setdefault("leave", False)
-        kwargs.setdefault("position", 0)
-        kwargs.setdefault("dynamic_ncols", True)
-        kwargs.setdefault("mininterval", 0.2)
-        return original_init(self, *args, **kwargs)
+    def _patched_init(self, *args, **kwargs):  # 定义补丁后的初始化方法
+        kwargs.setdefault("leave", False)  # 默认完成后清除进度条
+        kwargs.setdefault("position", 0)  # 默认固定在第一行
+        kwargs.setdefault("dynamic_ncols", True)  # 默认动态列宽
+        kwargs.setdefault("mininterval", 0.2)  # 默认最小刷新间隔 0.2 秒
+        return original_init(self, *args, **kwargs)  # 调用原始初始化
 
-    tqdm_cls.__init__ = _patched_init
-    tqdm_cls._single_line_patch_applied = True
+    tqdm_cls.__init__ = _patched_init  # 替换 tqdm 初始化方法
+    tqdm_cls._single_line_patch_applied = True  # 标记补丁已应用
 
 
-def run_sasrec_with_device(
-    config_path: Path,
-    model_name: str,
-    seed: int | None = None,
-) -> tuple[float, dict, dict]:
-    _patch_tqdm_single_line()
+def run_sasrec_with_device(  # 在选定设备上运行 SASRec 训练与评估
+    config_path: Path,  # 配置文件路径
+    model_name: str,  # 模型名称
+    seed: int | None = None,  # 可选随机种子
+) -> tuple[float, dict, dict]:  # 返回最佳验证分数、验证结果与测试结果
+    _patch_tqdm_single_line()  # 应用 tqdm 单行补丁
 
-    selected_device = _select_device()
-    use_gpu = selected_device.type == "cuda"
-    gpu_id = "0" if use_gpu else ""
+    selected_device = _select_device()  # 选择训练设备
+    use_gpu = selected_device.type == "cuda"  # 判断是否使用 GPU
+    gpu_id = "0" if use_gpu else ""  # 设置 GPU 设备 ID
 
-    config_dict = {"use_gpu": use_gpu, "gpu_id": gpu_id}
-    if seed is not None:
-        config_dict["seed"] = seed
+    config_dict = {"use_gpu": use_gpu, "gpu_id": gpu_id}  # 构建设备相关配置字典
+    if seed is not None:  # 若指定了随机种子
+        config_dict["seed"] = seed  # 将种子写入配置
 
-    config = Config(
-        model=model_name,
-        config_file_list=[str(config_path)],
-        config_dict=config_dict,
-    )
-    config.final_config_dict["device"] = selected_device
-    # Force tqdm progress bars in terminal during train/eval.
-    config.final_config_dict["show_progress"] = True
+    config = Config(  # 创建 RecBole 配置对象
+        model=model_name,  # 指定模型名称
+        config_file_list=[str(config_path)],  # 加载配置文件
+        config_dict=config_dict,  # 传入覆盖配置
+    )  # 配置创建完成
+    config.final_config_dict["device"] = selected_device  # 强制设置训练设备
+    # Force tqdm progress bars in terminal during train/eval.  # 训练与评估时在终端显示 tqdm 进度条
+    config.final_config_dict["show_progress"] = True  # 启用进度条显示
 
-    init_seed(config["seed"], config["reproducibility"])
-    init_logger(config)
-    logger = getLogger()
-    logger.info(f"Selected device: {selected_device}")
-    logger.info(f"Seed: {config['seed']}")
+    init_seed(config["seed"], config["reproducibility"])  # 初始化全局随机种子
+    init_logger(config)  # 初始化 RecBole 日志
+    logger = getLogger()  # 获取日志记录器
+    logger.info(f"Selected device: {selected_device}")  # 记录所选设备
+    logger.info(f"Seed: {config['seed']}")  # 记录随机种子
 
     dataset = create_dataset(config)  # 创建数据集
     train_data, valid_data, test_data = data_preparation(config, dataset)  # 划分训练/验证/测试数据
@@ -242,39 +242,39 @@ def run_sasrec_with_device(
         test_data, load_best_model=True, show_progress=config["show_progress"]  # 评估参数
     )  # 评估完成
 
-    logger.info(f"best valid score: {best_valid_score}")
-    logger.info(f"best valid result: {best_valid_result}")
-    logger.info(f"test result: {test_result}")
-    return best_valid_score, best_valid_result, test_result
+    logger.info(f"best valid score: {best_valid_score}")  # 记录最佳验证分数
+    logger.info(f"best valid result: {best_valid_result}")  # 记录最佳验证结果
+    logger.info(f"test result: {test_result}")  # 记录测试结果
+    return best_valid_score, best_valid_result, test_result  # 返回训练与评估结果
 
 
-def _parse_seeds(seed: int | None, seeds: str | None) -> list[int]:
-    if seeds:
-        parsed = [int(token.strip()) for token in seeds.split(",") if token.strip()]
-        if not parsed:
-            raise ValueError("--seeds is provided but empty.")
-        return parsed
-    if seed is not None:
-        return [seed]
-    return []
+def _parse_seeds(seed: int | None, seeds: str | None) -> list[int]:  # 解析单种子或多种子参数
+    if seeds:  # 若提供了多种子字符串
+        parsed = [int(token.strip()) for token in seeds.split(",") if token.strip()]  # 按逗号分割并解析整数
+        if not parsed:  # 解析结果为空
+            raise ValueError("--seeds is provided but empty.")  # 抛出值错误
+        return parsed  # 返回种子列表
+    if seed is not None:  # 若提供了单种子
+        return [seed]  # 返回单元素种子列表
+    return []  # 未指定种子则返回空列表
 
 
-def _metrics_to_float_dict(metrics: dict) -> dict:
-    return {key: float(value) for key, value in metrics.items()}
+def _metrics_to_float_dict(metrics: dict) -> dict:  # 将指标字典值转为浮点数
+    return {key: float(value) for key, value in metrics.items()}  # 逐项转换并返回
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Train SASRec on H&M data")
-    parser.add_argument("--config", default="configs/sasrec.yaml")
-    parser.add_argument("--skip-preprocess", action="store_true")
-    parser.add_argument("--seed", type=int, default=None, help="Run one custom seed")
-    parser.add_argument(
-        "--seeds",
-        type=str,
-        default=None,
-        help="Run multiple seeds, comma-separated (e.g., 2024,2025,2026)",
-    )
-    args = parser.parse_args()
+def main():  # 命令行入口函数
+    parser = argparse.ArgumentParser(description="Train SASRec on H&M data")  # 创建参数解析器
+    parser.add_argument("--config", default="configs/sasrec.yaml")  # 配置文件路径参数
+    parser.add_argument("--skip-preprocess", action="store_true")  # 跳过预处理开关
+    parser.add_argument("--seed", type=int, default=None, help="Run one custom seed")  # 单种子参数
+    parser.add_argument(  # 多种子参数
+        "--seeds",  # 参数名
+        type=str,  # 字符串类型
+        default=None,  # 默认不指定
+        help="Run multiple seeds, comma-separated (e.g., 2024,2025,2026)",  # 帮助文本
+    )  # 多种子参数结束
+    args = parser.parse_args()  # 解析命令行参数
 
     config_path = Path(args.config)  # 配置文件路径对象
     if not config_path.exists():  # 配置文件不存在
@@ -289,36 +289,36 @@ def main():
     max_item_list_length = _read_max_item_list_length(config_path)  # 读取最大序列长度
     prepare_recbole_benchmark_files(max_item_list_length)  # 准备 RecBole 基准文件
 
-    model_name = _read_model_name(config_path)
-    if model_name.upper() == "SASRECF":
-        build_item_features()
+    model_name = _read_model_name(config_path)  # 从配置读取模型名称
+    if model_name.upper() == "SASRECF":  # 若为 SASRecF 模型
+        build_item_features()  # 构建商品特征文件
 
-    seed_list = _parse_seeds(args.seed, args.seeds)
-    if not seed_list:
-        run_sasrec_with_device(config_path, model_name=model_name)
-        return
+    seed_list = _parse_seeds(args.seed, args.seeds)  # 解析种子列表
+    if not seed_list:  # 未指定种子时单次运行
+        run_sasrec_with_device(config_path, model_name=model_name)  # 使用默认种子训练
+        return  # 直接返回
 
-    all_results: list[dict] = []
-    for run_seed in seed_list:
-        best_valid_score, best_valid_result, test_result = run_sasrec_with_device(
-            config_path, model_name=model_name, seed=run_seed
-        )
-        all_results.append(
-            {
-                "seed": run_seed,
-                "best_valid_score": float(best_valid_score),
-                "best_valid_result": _metrics_to_float_dict(best_valid_result),
-                "test_result": _metrics_to_float_dict(test_result),
-            }
-        )
+    all_results: list[dict] = []  # 初始化多种子结果列表
+    for run_seed in seed_list:  # 遍历每个种子
+        best_valid_score, best_valid_result, test_result = run_sasrec_with_device(  # 以当前种子训练评估
+            config_path, model_name=model_name, seed=run_seed  # 传入配置、模型名与种子
+        )  # 单次种子运行完成
+        all_results.append(  # 追加当前种子结果
+            {  # 结果字典
+                "seed": run_seed,  # 当前种子值
+                "best_valid_score": float(best_valid_score),  # 最佳验证分数
+                "best_valid_result": _metrics_to_float_dict(best_valid_result),  # 最佳验证指标
+                "test_result": _metrics_to_float_dict(test_result),  # 测试集指标
+            }  # 结果字典结束
+        )  # 追加完成
 
-    report_path = Path("outputs/evaluation/sasrec_multi_seed_results.json")
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(
-        json.dumps({"config": str(config_path), "results": all_results}, indent=2),
-        encoding="utf-8",
-    )
-    print(f"Saved multi-seed results: {report_path}")
+    report_path = Path("outputs/evaluation/sasrec_multi_seed_results.json")  # 多种子结果报告路径
+    report_path.parent.mkdir(parents=True, exist_ok=True)  # 创建输出目录
+    report_path.write_text(  # 写入多种子结果 JSON
+        json.dumps({"config": str(config_path), "results": all_results}, indent=2),  # 序列化结果数据
+        encoding="utf-8",  # 使用 UTF-8 编码
+    )  # 写入完成
+    print(f"Saved multi-seed results: {report_path}")  # 打印保存路径
 
 
 if __name__ == "__main__":  # 脚本直接运行时

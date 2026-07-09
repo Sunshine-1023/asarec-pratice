@@ -35,9 +35,9 @@ def split_by_time(  # 按时间窗口切分交互数据
 ) -> tuple[Path, Path, Path]:  # 返回三个输出文件路径
     if train_weeks + valid_weeks + test_weeks != total_weeks:  # 校验周数之和
         raise ValueError(  # 参数不合法
-            f"train_weeks ({train_weeks}) + valid_weeks ({valid_weeks}) + "
-            f"test_weeks ({test_weeks}) must equal total_weeks ({total_weeks})"
-        )
+            f"train_weeks ({train_weeks}) + valid_weeks ({valid_weeks}) + "  # 错误信息前半段
+            f"test_weeks ({test_weeks}) must equal total_weeks ({total_weeks})"  # 错误信息后半段
+        )  # 结束 ValueError 抛出
 
     inter_path = inter_path or INTER_FILE  # 默认输入路径
     train_inter_path = train_inter_path or TRAIN_INTER_FILE  # 默认训练输出路径
@@ -64,26 +64,26 @@ def split_by_time(  # 按时间窗口切分交互数据
         (train_df, train_inter_path),  # 训练集
         (valid_df, valid_inter_path),  # 验证集
         (test_df, test_inter_path),  # 测试集
-    ):
+    ):  # 开始遍历三个划分
         split_df = split_df.sort_values(["user_id:token", "timestamp:float"])  # 按用户与时间排序
         split_df[["user_id:token", "item_id:token", "timestamp:float"]].to_csv(  # 只写 RecBole 三列
             output_path, sep="\t", index=False  # 制表符分隔、不写行索引
-        )
+        )  # 结束 to_csv 写入
 
     print(  # 打印日期窗口说明
         f"Data window: [{window_start.date()}, {max_date.date()}] ({total_weeks} weeks); "  # 总窗口
         f"train [{window_start.date()}, {(valid_start - pd.Timedelta(days=1)).date()}] ({train_weeks}w), "  # 训练区间
         f"valid [{valid_start.date()}, {(test_start - pd.Timedelta(days=1)).date()}] ({valid_weeks}w), "  # 验证区间
         f"test [{test_start.date()}, {max_date.date()}] ({test_weeks}w)"  # 测试区间
-    )
+    )  # 结束日期窗口说明打印
     print(  # 打印各划分行数
         f"Rows - train: {len(train_df):,}, valid: {len(valid_df):,}, test: {len(test_df):,}"  # 行数统计
-    )
+    )  # 结束行数统计打印
     print(  # 打印各划分用户数
         f"Users - train: {train_df['user_id:token'].nunique():,}, "  # 训练用户数
         f"valid: {valid_df['user_id:token'].nunique():,}, "  # 验证用户数
         f"test: {test_df['user_id:token'].nunique():,}"  # 测试用户数
-    )
+    )  # 结束用户数统计打印
     return train_inter_path, valid_inter_path, test_inter_path  # 返回三个输出路径
 
 
