@@ -88,24 +88,20 @@ def recall_itemcf(  # 基于 ItemCF 索引召回商品
 ) -> list[tuple[str, float]]:  # 返回商品 ID 与聚合分数列表
     """Recall top-k items by aggregating similar neighbors of history items."""  # 聚合历史商品相似邻居进行召回
     history_list = [str(x) for x in user_history]  # 规范化历史商品为字符串列表
-    history_set = set(history_list)  # 转为集合便于过滤
     scores: defaultdict[str, float] = defaultdict(float)  # 初始化候选商品聚合得分
 
     for item in history_list:  # 遍历用户历史中的每个商品
         for neighbor, sim in itemcf_index.get(item, {}).items():  # 遍历该商品的相似邻居
-            if neighbor in history_set:  # 若邻居已在历史中
-                continue  # 跳过该邻居
-            scores[neighbor] += sim  # 累加相似度得分
+            scores[neighbor] += sim  # 累加相似度得分（含复购同款）
 
     ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)  # 按得分降序排序
     return ranked[:top_k]  # 返回 Top-K 召回结果
 
 
-if __name__ == "__main__":
-    index = build_itemcf_index()
-    # Use existing indexed items to avoid format mismatch in demo IDs.
-    sample_history = list(index.keys())[:3]
-    sample = recall_itemcf(sample_history, index, top_k=10)
-    print(f"ItemCF index size: {len(index):,}")
-    print("Top-10 sample:", sample)
-
+if __name__ == "__main__":  # 脚本直接运行入口
+    index = build_itemcf_index()  # 构建 ItemCF 相似度索引
+    # Use existing indexed items to avoid format mismatch in demo IDs.  # 使用已有索引商品避免演示 ID 格式不匹配
+    sample_history = list(index.keys())[:3]  # 取前 3 个商品作为示例历史
+    sample = recall_itemcf(sample_history, index, top_k=10)  # 召回 Top-10 示例
+    print(f"ItemCF index size: {len(index):,}")  # 打印索引规模
+    print("Top-10 sample:", sample)  # 打印 Top-10 示例结果

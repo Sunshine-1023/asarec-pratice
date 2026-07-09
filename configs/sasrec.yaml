@@ -22,8 +22,9 @@ eval_args:  # 评估设置
 benchmark_filename: [train, valid, test]  # 使用 train/valid/test 三份 benchmark 文件
 
 metrics: ['MAP', 'Recall', 'NDCG', 'MRR', 'Hit', 'Precision']  # 训练过程中计算的指标
-topk: [12]  # Top-K 评估（与 H&M 竞赛 K=12 一致）
+topk: [12]  # 训练/早停评估 Top-K（与 H&M 竞赛最终提交 K=12 一致）
 valid_metric: NDCG@12  # 早停与选最优 checkpoint 的验证指标
+recall_top_k: 100  # 召回阶段先取 Top-100，融合或最终提交再截断到 Top-12
 
 model: SASRec
 hidden_size: 256
