@@ -1,13 +1,13 @@
 # Task Plan: FashionRec-Transformer Architecture Refactor
 
 ## Goal
-Refactor the project into a contract-driven, run-scoped recommendation pipeline with consistent IDs, explicit artifacts, decoupled data/recall/ranking/evaluation stages, and backward-compatible CLI entrypoints.
+Refactor the project into a contract-driven, run-scoped recommendation pipeline and make the offline training protocol temporally causal with user-week MAP@12 checkpoint selection.
 
 ## Next Step
-Refactor complete; hand off the new structure, verification evidence, and intentionally deferred model-training work.
+Implement split-first preprocessing with train-fitted sampling and a separate model-training split.
 
 ## Current Phase
-Complete
+Phase 6
 
 ## Phases
 
@@ -51,6 +51,29 @@ Complete
 - [x] Summarize changed files and remaining follow-up work
 - **Status:** complete
 
+### Phase 6: Make Data Preparation Temporally Causal
+- [x] Stop filtering users or truncating histories before time split
+- [x] Fit optional item sampling only on the train window
+- [x] Create a train-only active-user model split while preserving full causal history files
+- [x] Make sequence training consume model-train while valid/test histories use full earlier interactions
+- [x] Add leakage-focused tests
+- **Status:** complete
+
+### Phase 7: Align Checkpoint Selection with User-Week MAP@12
+- [x] Remove automatic test evaluation from training
+- [x] Preserve top RecBole-valid checkpoints as a coarse shortlist
+- [x] Add valid-only user-week checkpoint selection
+- [x] Feed the selected checkpoint into recall/candidate stages
+- [x] Add selection and pipeline-plan tests
+- **Status:** complete
+
+### Phase 8: Protocol Verification and Documentation
+- [x] Run the complete test suite and CLI smoke tests
+- [x] Verify test is absent before the final evaluation stage
+- [x] Update the architecture and workflow documentation
+- [x] Record intentionally unexecuted training work
+- **Status:** complete
+
 ## Key Questions
 1. How can the architecture be improved without overwriting the user's existing uncommitted baseline work?
 2. Which compatibility wrappers must remain so documented commands continue to work?
@@ -66,6 +89,8 @@ Complete
 | Materialize a common candidate table before ranking/evaluation | Weighted fusion and future LightGBM must consume identical candidates |
 | Keep model training details in model YAML referenced by experiment config | Avoid duplicating RecBole hyperparameters in the orchestration config |
 | Do not perform Git operations | The user asked for a refactor, not Git changes |
+| Preserve full train/valid/test history files and create a separate model-train file | Active-user filtering should affect model fitting, not erase causal history needed by rule recall and cold-start evaluation |
+| Select the final sequence checkpoint using valid user-week MAP@12 | Align checkpoint choice with the project's final recommendation unit |
 
 ## Errors Encountered
 | Error | Attempt | Resolution |
@@ -74,8 +99,10 @@ Complete
 | Time-split sorting test expected legacy unpadded IDs after canonicalization | 1 | Update the assertion to the new ten-character shared ID contract |
 | `run_sasrec.py --help` imported RecBole eagerly and failed in the current environment | 1 | Move optional RecBole imports into the actual training function so CLI/help and data modules remain inspectable |
 | Combined architecture-doc/README patch missed an exact README sentence | 1 | No partial README edit applied; add the document and README sections in smaller patches |
+| Combined causal-data patch missed current `preprocess.py` context | 1 | No partial edits applied; inspect exact blocks and patch each module separately |
 
 ## Notes
 - Existing user modifications must be preserved.
 - No model training or score comparison is required for this refactor.
 - Current baseline before refactor: 28 tests pass.
+- Final protocol-refactor verification: 53 tests pass; no model training or real test scoring was run.

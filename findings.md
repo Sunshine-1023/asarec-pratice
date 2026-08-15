@@ -46,6 +46,22 @@
 - No score comparison or hyperparameter search was performed.
 - A concrete `LGBMRanker` training adapter can be added next on top of `src/ranking/features.py`; the data and orchestration boundaries are now ready.
 - Existing user-owned dirty-worktree changes and untracked documents were preserved.
+- RecBole is not installed in the current shell, so the real checkpoint snapshots and valid inference were intentionally not executed; the integration boundary is covered with fake trainer/checkpoint tests and lazy imports.
+
+## Training Protocol Audit
+- Preprocessing currently computes `min_user_purchases` and `tail(max_user_history)` over the complete six-week window before train/valid/test split; future weeks therefore affect the evaluation cohort and retained train rows.
+- Optional filtering currently computes popular items and active users over the complete six-week window as well.
+- The sequence builder correctly uses train history for valid and train+valid history for test, but it needs a separate model-train source so train-only user eligibility does not erase rule-recall history.
+- RecBole early stopping uses benchmark interaction rows, while final offline MAP@12 predicts once per user against the full future-week item set.
+- `run_sasrec.py` currently evaluates `test_data` immediately after training; this should be removed from model fitting and deferred to the final locked pipeline stage.
+- Phase 6 now preserves `hm.train.inter` as complete causal history and derives `hm.model_train.inter` using train-only activity counts; the remaining leakage is isolated to `src/data/filter.py`.
+- `src/data/filter.py` still fits Top-item popularity over all six weeks, filters users using all six weeks, and truncates histories globally; all three operations must be moved to train-only fitting or downstream sequence use.
+- Formal recall planning still passes a checkpoint directory, so the selected valid user-week checkpoint is not yet an explicit dependency.
+- Optional Top-item sampling now fits an immutable item universe on `[window_start, valid_start)` and applies it to the full experiment window; user eligibility and history caps are deliberately ignored at this pre-split stage.
+- Model fitting now consumes `hm.model_train.inter`, while valid history is rebuilt from complete `hm.train.inter` and test history additionally consumes the complete valid week.
+- `run_sasrec.py` no longer calls `trainer.evaluate(test_data)` or reports `test_result`; RecBole-valid improvements are copied into a bounded, config-driven shortlist.
+- `run_select_checkpoint.py` exports only valid recommendations for each candidate, groups all valid-week items per user, computes the canonical MAP@12, writes an auditable score manifest, and materializes `sasrecf_selected.pth`.
+- Formal valid/test recall commands now require the stable selected checkpoint explicitly; the only test evaluation command is the final pipeline step.
 
 ## Issues Encountered
 | Issue | Resolution |

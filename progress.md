@@ -2,6 +2,38 @@
 
 ## Session: 2026-08-15
 
+### Phase 6: Make Data Preparation Temporally Causal
+- **Status:** complete
+- Actions taken:
+  - Audited preprocessing, filter, split, sequence construction, RecBole training, sequence recall, and final evaluation semantics.
+  - Confirmed that full-window user filtering and history truncation currently happen before split.
+  - Confirmed that RecBole checkpoint selection is interaction-level while final evaluation is one prediction per user-week.
+- Files created/modified:
+  - `src/data/preprocess.py`: removed global user filtering and history truncation.
+  - `src/data/split.py`: added train-only `hm.model_train.inter` derivation.
+  - `src/data/build_sequences.py`: separated model-fitting rows from complete train history.
+  - `src/data/manifest.py`: records the model-train artifact.
+  - `run_data_prep.py`: runs model-train derivation after time split.
+  - `src/data/filter.py`: fits optional Top-item sampling on train only and no longer filters users or truncates histories.
+  - `tests/test_preprocess_causality.py`, `tests/test_no_leakage.py`, `tests/test_time_split.py`, `tests/test_build_sequences.py`: added causal protocol coverage.
+
+### Phase 7: Align Checkpoint Selection with User-Week MAP@12
+- **Status:** complete
+- Actions taken:
+  - Started inspecting RecBole training/checkpoint hooks, SASRecF recall export, canonical metric helpers, and formal pipeline dependencies.
+  - Removed training-time test evaluation and test metrics from `run_sasrec.py`.
+  - Added a bounded RecBole-valid improving-checkpoint snapshot hook under `src/training/checkpoints.py`.
+  - Added valid-only user-week MAP@K scoring, selection manifest, stable selected checkpoint, and CLI entrypoint.
+  - Updated formal orchestration so both recall splits consume `sasrecf_selected.pth` explicitly.
+  - Added configuration, training-protocol, selection, and pipeline-order tests.
+
+### Phase 8: Protocol Verification and Documentation
+- **Status:** complete
+- Actions taken:
+  - Updated README and architecture documentation with causal data and checkpoint-selection contracts.
+  - Confirmed the final pipeline step is the only test offline evaluation command.
+  - Did not train SASRecF or calculate real valid/test scores because the task concerns workflow correctness and RecBole is unavailable in this shell.
+
 ### Phase 1: Preserve Context and Define Contracts
 - **Status:** complete
 - **Started:** 2026-08-15
@@ -107,6 +139,11 @@
 | Phase 3 full suite | same command | Shared recall/candidate path remains compatible | 40 passed | ✓ |
 | Phase 4 full suite | same command | Ranking/orchestration refactor remains compatible | 44 passed | ✓ |
 | Final full suite | same command | All refactor phases remain green | 44 passed | ✓ |
+| Phase 6 focused suite | preprocessing/leakage/time split/sequence tests | No future-dependent cohort, item-universe, or history behavior | 15 passed | ✓ |
+| Phase 7 focused suite | config/pipeline/training protocol | Valid-only checkpoint selection and explicit selected-model dependency | 10 passed | ✓ |
+| Protocol final suite | `PYTHONDONTWRITEBYTECODE=1 pytest -p no:cacheprovider -q` | All refactor and protocol tests pass | 53 passed | ✓ |
+| Final Python syntax audit | AST parse `src/**/*.py` and `run_*.py` | No syntax errors | 55 files parsed | ✓ |
+| Final CLI smoke | data prep, SASRec, checkpoint selection, pipeline, rule recall, weight search, offline eval `--help` | No training or optional RecBole import required for inspected entrypoints | All passed | ✓ |
 | Python syntax audit | AST parse all `src/**/*.py` and `run_*.py` | No syntax errors | 51 files parsed | ✓ |
 | CLI smoke | `--help` on six main entrypoints | No training/import failure | All passed | ✓ |
 
@@ -117,12 +154,15 @@
 | 2026-08-15 | Focused suite: time-split test expected `1`, `2` after IDs became canonical | 1 | Update test expectation to `0000000001`, `0000000002` |
 | 2026-08-15 | CLI smoke for `run_sasrec.py --help` failed with `ModuleNotFoundError: recbole` | 1 | Lazy-load RecBole only when training actually starts; no environment installation required |
 | 2026-08-15 | Combined documentation patch failed on one README context line | 1 | Split documentation creation and README edits into targeted patches |
+| 2026-08-15 | Combined causal-data patch failed context verification in `preprocess.py` | 1 | Switch to small per-file patches after reading exact numbered lines |
+| 2026-08-16 | Repository search command used unmatched zsh globs for optional environment files | 1 | Avoid optional bare globs; search explicit files/directories instead |
+| 2026-08-16 | Checkpoint-selection test searched the full JSON string for `test`, but pytest's temporary path itself contains `test_...` | 1 | Assert the manifest's exact valid-only schema and `selection_split` instead of scanning path text |
 
 ## 5-Question Reboot Check
 | Question | Answer |
 |----------|--------|
-| Where am I? | Refactor complete |
-| Where am I going? | Optional next phase: implement and validate LightGBM LambdaRank training |
-| What's the goal? | Contract-driven, run-scoped, backward-compatible recommendation pipeline |
+| Where am I? | Training-protocol refactor complete |
+| Where am I going? | No required work remains; real training is intentionally deferred |
+| What's the goal? | Temporally causal data preparation and user-week-aligned checkpoint selection |
 | What have I learned? | See `findings.md` |
-| What have I done? | Completed contracts, data decoupling, unified candidates, ranking boundary, run-scoped orchestration, tests, and docs |
+| What have I done? | Removed future-dependent filtering, separated model-train/history, removed early test evaluation, and added valid-only checkpoint selection |

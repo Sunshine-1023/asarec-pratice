@@ -19,6 +19,7 @@ class PipelineOptions:
     with_filter: bool = False
     skip_data_prep: bool = False
     skip_train: bool = False
+    skip_checkpoint_selection: bool = False
     skip_recall: bool = False
     skip_candidates: bool = False
     skip_weight_search: bool = False
@@ -58,8 +59,32 @@ def build_pipeline_steps(
                     str(cfg.experiment.seed),
                     "--checkpoint-dir",
                     str(artifacts.checkpoints / "sasrecf"),
+                    "--checkpoint-shortlist-size",
+                    str(cfg.model_selection.checkpoint_shortlist_size),
                     "--report-path",
                     str(artifacts.evaluation / "sasrecf_train_results.json"),
+                ),
+            )
+        )
+
+    selected_checkpoint = artifacts.selected_checkpoint_file("sasrecf")
+    if not options.skip_checkpoint_selection:
+        steps.append(
+            PipelineStep(
+                "valid 用户周 MAP 选择 SASRecF checkpoint",
+                (
+                    python_executable,
+                    "run_select_checkpoint.py",
+                    "--checkpoint-dir",
+                    str(artifacts.checkpoints / "sasrecf"),
+                    "--recall-dir",
+                    str(artifacts.recall / "checkpoint_selection"),
+                    "--output-json",
+                    str(artifacts.checkpoint_selection_file("sasrecf")),
+                    "--selected-model-path",
+                    str(selected_checkpoint),
+                    "--top-k",
+                    str(cfg.candidate.final_top_k),
                 ),
             )
         )
@@ -78,8 +103,8 @@ def build_pipeline_steps(
                         split,
                         "--top-k",
                         str(cfg.candidate.sequence_top_k),
-                        "--checkpoint-dir",
-                        str(artifacts.checkpoints / "sasrecf"),
+                        "--model-file",
+                        str(selected_checkpoint),
                         "--output-path",
                         str(sequence_path),
                     ),

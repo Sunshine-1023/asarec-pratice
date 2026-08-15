@@ -35,3 +35,33 @@ def test_read_max_item_list_length_ignores_inline_comment(tmp_path: Path) -> Non
     config = tmp_path / "model.yaml"
     config.write_text("MAX_ITEM_LIST_LENGTH: 100  # history cap\n", encoding="utf-8")
     assert read_max_item_list_length(config) == 100
+
+
+def test_sequence_builder_fits_on_model_train_but_uses_complete_train_history(tmp_path: Path) -> None:
+    model_train = tmp_path / "model_train.inter"
+    full_train = tmp_path / "train.inter"
+    valid = tmp_path / "valid.inter"
+    test = tmp_path / "test.inter"
+    _write_inter(model_train, [("eligible", "1", 1), ("eligible", "2", 2)])
+    _write_inter(
+        full_train,
+        [("eligible", "1", 1), ("eligible", "2", 2), ("low_activity", "7", 2)],
+    )
+    _write_inter(valid, [("eligible", "3", 3), ("low_activity", "8", 3)])
+    _write_inter(test, [("low_activity", "9", 4)])
+
+    outputs = prepare_recbole_benchmark_files(
+        3,
+        model_train,
+        valid,
+        test,
+        tmp_path / "seq",
+        train_history_file=full_train,
+    )
+    train_out, valid_out, test_out = (pd.read_csv(path, sep="\t", dtype="string") for path in outputs)
+
+    assert set(train_out["user_id:token"]) == {"eligible"}
+    low_valid = valid_out[valid_out["user_id:token"] == "low_activity"].iloc[0]
+    assert low_valid["item_id_list:token_seq"] == "0000000007"
+    low_test = test_out[test_out["user_id:token"] == "low_activity"].iloc[0]
+    assert low_test["item_id_list:token_seq"] == "0000000007 0000000008"

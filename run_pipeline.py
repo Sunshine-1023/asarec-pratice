@@ -36,6 +36,11 @@ def main() -> None:  # 命令行入口：组装并顺序执行流水线步骤
     )  # --with-filter 参数结束
     parser.add_argument("--skip-data-prep", action="store_true", help="Skip step 1")  # 跳过步骤 1 数据准备
     parser.add_argument("--skip-train", action="store_true", help="Skip step 2 (SASRecF training)")  # 跳过步骤 2 SASRecF 训练
+    parser.add_argument(
+        "--skip-checkpoint-selection",
+        action="store_true",
+        help="Reuse the run's existing sasrecf_selected.pth instead of re-scoring valid",
+    )
     parser.add_argument("--skip-recall", action="store_true", help="Skip step 3 (SASRecF recall export)")  # 跳过步骤 3 召回导出
     parser.add_argument("--skip-candidates", action="store_true", help="Skip four-channel candidate materialization")
     parser.add_argument(  # 定义 --export-rule-recall 参数
@@ -82,6 +87,7 @@ def main() -> None:  # 命令行入口：组装并顺序执行流水线步骤
         with_filter=args.with_filter,
         skip_data_prep=args.skip_data_prep,
         skip_train=args.skip_train,
+        skip_checkpoint_selection=args.skip_checkpoint_selection,
         skip_recall=args.skip_recall,
         skip_candidates=args.skip_candidates,
         skip_weight_search=args.skip_weight_search,

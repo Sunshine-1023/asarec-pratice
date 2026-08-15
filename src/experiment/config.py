@@ -49,6 +49,11 @@ class CandidateConfig:  # 候选召回协议
     final_top_k: int  # 最终推荐条数
 
 
+@dataclass(frozen=True)
+class ModelSelectionConfig:
+    checkpoint_shortlist_size: int
+
+
 @dataclass(frozen=True)  # 不可变数据类
 class EvaluationConfig:  # 评估协议
     primary_metric: str  # 主指标名称
@@ -60,6 +65,7 @@ class EvaluationConfig:  # 评估协议
 class ExperimentConfig:  # 完整实验配置
     experiment: ExperimentMeta  # 实验元信息
     data: DataConfig  # 数据协议
+    model_selection: ModelSelectionConfig
     candidate: CandidateConfig  # 候选协议
     evaluation: EvaluationConfig  # 评估协议
     source_path: Path  # 配置文件路径
@@ -139,6 +145,7 @@ def load_experiment_config(path: str | Path | None = None) -> ExperimentConfig: 
 
     experiment_raw = _require_mapping(root.get("experiment"), "experiment")  # 实验元信息节点
     data_raw = _require_mapping(root.get("data"), "data")  # 数据协议节点
+    model_selection_raw = _require_mapping(root.get("model_selection", {}), "model_selection")
     candidate_raw = _require_mapping(root.get("candidate"), "candidate")  # 候选协议节点
     evaluation_raw = _require_mapping(root.get("evaluation"), "evaluation")  # 评估协议节点
 
@@ -155,6 +162,14 @@ def load_experiment_config(path: str | Path | None = None) -> ExperimentConfig: 
         max_user_history=_require_int(data_raw, "max_user_history", "data"),  # 历史长度上限
         min_user_purchases=_require_int(data_raw, "min_user_purchases", "data"),  # 最少购买次数
     )  # 数据协议结束
+    model_selection = ModelSelectionConfig(
+        checkpoint_shortlist_size=_require_int(
+            model_selection_raw,
+            "checkpoint_shortlist_size",
+            "model_selection",
+            default=5,
+        )
+    )
     candidate = CandidateConfig(  # 组装候选协议
         per_channel_top_k=per_channel_top_k,  # 每通道默认 Top-K
         popular_top_k=_require_int(candidate_raw, "popular_top_k", "candidate", default=per_channel_top_k),  # 热门 Top-K
@@ -176,10 +191,13 @@ def load_experiment_config(path: str | Path | None = None) -> ExperimentConfig: 
         raise ExperimentConfigError("data week counts must be positive")  # 抛出错误
     if candidate.final_top_k <= 0:  # 最终 K 必须为正
         raise ExperimentConfigError("candidate.final_top_k must be positive")  # 抛出错误
+    if model_selection.checkpoint_shortlist_size <= 0:
+        raise ExperimentConfigError("model_selection.checkpoint_shortlist_size must be positive")
 
     return ExperimentConfig(  # 返回完整配置
         experiment=experiment,  # 元信息
         data=data,  # 数据协议
+        model_selection=model_selection,
         candidate=candidate,  # 候选协议
         evaluation=evaluation,  # 评估协议
         source_path=config_path.resolve(),  # 配置绝对路径

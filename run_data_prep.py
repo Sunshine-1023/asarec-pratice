@@ -12,7 +12,7 @@ from src.data.build_sequences import prepare_recbole_benchmark_files, read_max_i
 from src.data.filter import run_filter  # 导入原始数据过滤函数
 from src.data.manifest import build_processed_hm_manifest, write_manifest  # 数据快照清单
 from src.data.preprocess import MIN_USER_PURCHASES, MAX_USER_HISTORY, WEEKS, build_inter_file, _default_input_path  # 导入交互文件构建函数
-from src.data.split import split_bounds_dict, split_by_time  # 导入按时间划分数据集函数
+from src.data.split import build_model_train_split, split_bounds_dict, split_by_time  # 时间划分与 train-only 模型子集
 from src.experiment.config import load_experiment_config  # 可选统一实验协议
 
 DEFAULT_CONFIG = Path("configs/sasrecf.yaml")  # SASRecF 默认配置文件路径
@@ -72,11 +72,13 @@ def main() -> None:  # 命令行入口：按顺序执行数据准备流程
 
     if args.with_filter:  # 若指定先运行过滤
         _run_step(  # 执行过滤步骤
-            "1/5 filter",  # 步骤名
+            "1/6 causal item sampling",  # 步骤名
             lambda: run_filter(  # 按协议过滤
                 min_user_purchases=min_user_purchases,  # 最少购买
                 max_user_behaviors=max_user_history,  # 每用户最大行为
                 weeks=weeks,  # 周数
+                valid_weeks=experiment.data.valid_weeks if experiment is not None else 1,
+                test_weeks=experiment.data.test_weeks if experiment is not None else 1,
             ),  # 过滤调用结束
         )  # 过滤步骤结束
         step = 2  # 下一步从 2 开始编号
@@ -84,7 +86,7 @@ def main() -> None:  # 命令行入口：按顺序执行数据准备流程
         step = 1  # 从步骤 1 开始编号
 
     _run_step(  # 执行预处理
-        f"{step}/5 preprocess",  # 步骤名
+        f"{step}/6 preprocess",  # 步骤名
         lambda: build_inter_file(  # 构建交互文件
             weeks=weeks,  # 周数
             min_user_purchases=min_user_purchases,  # 最少购买
@@ -105,8 +107,14 @@ def main() -> None:  # 命令行入口：按顺序执行数据准备流程
             }  # 参数结束
         split_result = split_by_time(**split_kwargs)  # 执行切分
 
-    _run_step(f"{step}/5 split", _split)  # 执行按时间划分
+    _run_step(f"{step}/6 split", _split)  # 执行按时间划分
     step += 1  # 步骤编号加一
+
+    _run_step(  # 只用 train 统计模型训练用户，不删除完整历史
+        f"{step}/6 model_train",
+        lambda: build_model_train_split(min_user_purchases=min_user_purchases),
+    )
+    step += 1
 
     def _write_manifest() -> None:  # 数据准备成功后写快照
         preprocess = {  # 记录实际使用的预处理参数
@@ -139,9 +147,9 @@ def main() -> None:  # 命令行入口：按顺序执行数据准备流程
     def _prepare_seq() -> None:  # 闭包：准备 hm_seq 序列文件
         prepare_recbole_benchmark_files(max_item_list_length)  # 调用 RecBole 基准文件准备
 
-    _run_step(f"{step}/5 hm_seq", _prepare_seq)  # 执行 hm_seq 转换
+    _run_step(f"{step}/6 hm_seq", _prepare_seq)  # 执行 hm_seq 转换
     step += 1  # 步骤编号加一
-    _run_step(f"{step}/5 build_item_features", build_item_features)  # 执行商品特征构建
+    _run_step(f"{step}/6 build_item_features", build_item_features)  # 执行商品特征构建
 
     print("\nData preparation finished.")  # 提示数据准备完成
     _write_manifest()  # 写出数据快照清单

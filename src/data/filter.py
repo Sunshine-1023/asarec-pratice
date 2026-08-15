@@ -1,4 +1,4 @@
-"""Filter H&M raw data: last 6 weeks, top items, active users."""  # 过滤 H&M 原始数据：最近 6 周、热门商品、活跃用户
+"""Create an optional train-fitted item sample over the experiment window."""  # 只用训练窗拟合商品集合，再应用到完整实验窗口
 
 from __future__ import annotations  # 启用延迟注解评估
 
@@ -17,6 +17,8 @@ TOP_ITEMS = 30_000  # 保留的热门商品数量上限
 MIN_USER_PURCHASES = 5  # 用户最少购买次数阈值
 MAX_USER_BEHAVIORS = 100  # 每用户保留的最大行为条数（与序列模型 MAX_ITEM_LIST_LENGTH 对齐）
 WEEKS = 6  # 时间窗口周数（与 split 的 total_weeks 一致）
+VALID_WEEKS = 1  # 验证标签周数
+TEST_WEEKS = 1  # 测试标签周数
 CHUNK_SIZE = 500_000  # 分块读取 CSV 的行数
 
 
@@ -29,6 +31,40 @@ def _week_window_start(max_date: pd.Timestamp, weeks: int) -> pd.Timestamp:  # �
     return max_day - pd.Timedelta(days=weeks * 7 - 1)  # 含首尾共 weeks*7 天
 
 
+def _valid_window_start(  # 计算验证标签周起点，作为商品热度拟合截止点
+    max_date: pd.Timestamp,
+    valid_weeks: int,
+    test_weeks: int,
+) -> pd.Timestamp:
+    max_day = pd.Timestamp(max_date).normalize()
+    return max_day - pd.Timedelta(days=(valid_weeks + test_weeks) * 7 - 1)
+
+
+def _select_top_item_ids(item_counts: dict[str, int], top_items: int) -> set[str]:
+    if top_items < 1:
+        raise ValueError("top_items must be >= 1")
+    ordered = sorted(item_counts.items(), key=lambda pair: (-pair[1], pair[0]))
+    return {item_id for item_id, _count in ordered[:top_items]}
+
+
+def fit_train_item_universe(  # 纯函数：测试/复用时明确验证商品集合只由 train 决定
+    transactions: pd.DataFrame,
+    *,
+    window_start: pd.Timestamp,
+    valid_start: pd.Timestamp,
+    top_items: int,
+) -> set[str]:
+    frame = transactions.copy()
+    frame["t_dat"] = pd.to_datetime(frame["t_dat"])
+    frame["article_id"] = _normalize_article_id(frame["article_id"])
+    train = frame[
+        (frame["t_dat"].dt.normalize() >= pd.Timestamp(window_start).normalize())
+        & (frame["t_dat"].dt.normalize() < pd.Timestamp(valid_start).normalize())
+    ]
+    counts = {str(item_id): int(count) for item_id, count in train["article_id"].value_counts().items()}
+    return _select_top_item_ids(counts, top_items)
+
+
 def filter_transactions(  # 过滤交易记录并写入 CSV
     input_path: Path | None = None,  # 输入交易文件路径
     output_dir: Path | None = None,  # 输出目录
@@ -36,6 +72,8 @@ def filter_transactions(  # 过滤交易记录并写入 CSV
     min_user_purchases: int = MIN_USER_PURCHASES,  # 用户最少购买次数
     max_user_behaviors: int = MAX_USER_BEHAVIORS,  # 每用户最大行为数
     weeks: int = WEEKS,  # 时间窗口周数
+    valid_weeks: int = VALID_WEEKS,  # 验证标签周数
+    test_weeks: int = TEST_WEEKS,  # 测试标签周数
 ) -> Path:  # 返回输出文件路径
     input_path = input_path or RAW_DIR / "transactions_train.csv"  # 默认输入路径
     output_dir = output_dir or FILTERED_DIR  # 默认输出目录
@@ -50,55 +88,41 @@ def filter_transactions(  # 过滤交易记录并写入 CSV
         chunk_max = pd.to_datetime(chunk["t_dat"]).max()  # 当前块的最大日期
         max_date = chunk_max if max_date is None else max(max_date, chunk_max)  # 更新全局最大日期
 
-    cutoff = _week_window_start(max_date, weeks)  # 计算时间窗口起始日期
-    print(f"Date range: {cutoff.date()} ~ {max_date.date()} (last {weeks} weeks)")  # 打印日期范围
+    if max_date is None:
+        raise ValueError(f"No transactions found in {input_path}")
+    if weeks < 1 or valid_weeks < 1 or test_weeks < 1:
+        raise ValueError("weeks, valid_weeks, and test_weeks must all be >= 1")
+    if valid_weeks + test_weeks >= weeks:
+        raise ValueError("valid_weeks + test_weeks must be smaller than weeks")
 
-    # 第二遍：统计窗口内各商品购买次数
+    cutoff = _week_window_start(max_date, weeks)  # 计算时间窗口起始日期
+    valid_start = _valid_window_start(max_date, valid_weeks, test_weeks)  # train 拟合截止点（不含）
+    print(f"Date range: {cutoff.date()} ~ {max_date.date()} (last {weeks} weeks)")  # 打印日期范围
+    print(f"Fit Top-item universe on train only: [{cutoff.date()}, {valid_start.date()})")
+
+    # 第二遍：只统计 train 窗口内各商品购买次数；valid/test 不参与商品集合拟合
     item_counts: dict[str, int] = {}  # 商品 ID 到购买次数的映射
     for chunk in pd.read_csv(input_path, chunksize=CHUNK_SIZE):  # 分块读取完整交易
         chunk["t_dat"] = pd.to_datetime(chunk["t_dat"])  # 转换日期列
-        chunk = chunk[chunk["t_dat"].dt.normalize() >= cutoff]  # 保留窗口内记录
+        dates = chunk["t_dat"].dt.normalize()
+        chunk = chunk[(dates >= cutoff) & (dates < valid_start)]  # 仅保留 train 记录
         chunk["article_id"] = _normalize_article_id(chunk["article_id"])  # 规范化商品 ID
         counts = chunk["article_id"].value_counts()  # 统计本块各商品出现次数
         for item_id, count in counts.items():  # 遍历本块商品计数
             item_counts[item_id] = item_counts.get(item_id, 0) + int(count)  # 累加到全局计数
 
-    top_item_ids = {  # 取购买次数最多的 top_items 个商品 ID 集合
-        str(item_id)  # 转为字符串
-        for item_id in pd.Series(item_counts)  # 将计数字典转为 Series
-        .sort_values(ascending=False)  # 按次数降序排列
-        .head(top_items)  # 取前 top_items 个
-        .index  # 取索引即商品 ID
-    }  # 结束 top_item_ids 集合推导
-    print(f"Top {top_items} items selected (unique items in window: {len(item_counts):,})")  # 打印热门商品统计
+    top_item_ids = _select_top_item_ids(item_counts, top_items)
+    if not top_item_ids:
+        raise ValueError("No train-window items are available for Top-item sampling")
+    print(f"Top {len(top_item_ids):,} items selected (unique train items: {len(item_counts):,})")
 
-    # 第三遍：在商品过滤后统计用户购买次数
-    user_counts: dict[str, int] = {}  # 用户 ID 到购买次数的映射
-    for chunk in pd.read_csv(input_path, chunksize=CHUNK_SIZE):  # 分块读取交易
-        chunk["t_dat"] = pd.to_datetime(chunk["t_dat"])  # 转换日期列
-        chunk = chunk[chunk["t_dat"].dt.normalize() >= cutoff]  # 保留窗口内记录
-        chunk["article_id"] = _normalize_article_id(chunk["article_id"])  # 规范化商品 ID
-        chunk = chunk[chunk["article_id"].isin(top_item_ids)]  # 只保留热门商品
-        counts = chunk["customer_id"].value_counts()  # 统计本块各用户出现次数
-        for user_id, count in counts.items():  # 遍历本块用户计数
-            user_counts[user_id] = user_counts.get(user_id, 0) + int(count)  # 累加到全局计数
-
-    active_user_ids = {  # 购买次数达到阈值的用户 ID 集合
-        user_id for user_id, count in user_counts.items() if count >= min_user_purchases  # 过滤低活跃用户
-    }  # 结束 active_user_ids 集合推导
-    print(  # 打印活跃用户统计
-        f"Active users (>={min_user_purchases} purchases): "  # 活跃用户数量前缀
-        f"{len(active_user_ids):,} / {len(user_counts):,}"  # 活跃用户数 / 总用户数
-    )  # 结束活跃用户统计打印
-
-    # 第四遍：收集满足全部条件的交易
+    # 第三遍：把冻结的 train-fitted 商品集合应用到完整 train/valid/test 窗口
     filtered_chunks: list[pd.DataFrame] = []  # 存放各过滤后数据块
     for chunk in pd.read_csv(input_path, chunksize=CHUNK_SIZE):  # 分块读取交易
         chunk["t_dat"] = pd.to_datetime(chunk["t_dat"])  # 转换日期列
         chunk = chunk[chunk["t_dat"].dt.normalize() >= cutoff]  # 保留窗口内记录
         chunk["article_id"] = _normalize_article_id(chunk["article_id"])  # 规范化商品 ID
         chunk = chunk[chunk["article_id"].isin(top_item_ids)]  # 只保留热门商品
-        chunk = chunk[chunk["customer_id"].isin(active_user_ids)]  # 只保留活跃用户
         if not chunk.empty:  # 若本块非空
             filtered_chunks.append(chunk)  # 追加到列表
 
@@ -110,19 +134,12 @@ def filter_transactions(  # 过滤交易记录并写入 CSV
         return output_path  # 提前返回输出路径
 
     df = pd.concat(filtered_chunks, ignore_index=True)  # 合并所有过滤块
-    before_truncate = len(df)  # 截断前的行数
-
-    # 第五遍：每用户只保留最近 N 条行为
-    df = df.sort_values(["customer_id", "t_dat"])  # 按用户和日期排序
-    df = df.groupby("customer_id", sort=False).tail(max_user_behaviors)  # 每组取最后 max_user_behaviors 行
+    # 兼容保留 min_user_purchases/max_user_behaviors 参数，但用户资格在 split 后按 train 统计，
+    # 历史长度只在构造序列或召回上下文时截断，二者都不得删除标签周用户/历史。
+    _ = min_user_purchases, max_user_behaviors
+    df = df.sort_values(["customer_id", "t_dat", "article_id"], kind="mergesort")
     df["t_dat"] = df["t_dat"].dt.strftime("%Y-%m-%d")  # 日期格式化为字符串
     df.to_csv(output_path, index=False)  # 写入 CSV
-
-    truncated = before_truncate - len(df)  # 计算被截断删除的行数
-    print(  # 打印截断统计
-        f"Truncated to last {max_user_behaviors} behaviors per user "  # 截断说明前缀
-        f"({truncated:,} rows removed)"  # 删除行数
-    )  # 结束截断统计打印
     print(f"Saved {len(df):,} transactions to {output_path}")  # 打印保存条数
     return output_path  # 返回输出文件路径
 
@@ -176,6 +193,8 @@ def run_filter(  # 依次执行交易、商品、用户三步过滤
     min_user_purchases: int = MIN_USER_PURCHASES,  # 用户最少购买次数
     max_user_behaviors: int = MAX_USER_BEHAVIORS,  # 每用户最大行为数
     weeks: int = WEEKS,  # 时间窗口周数
+    valid_weeks: int = VALID_WEEKS,
+    test_weeks: int = TEST_WEEKS,
 ) -> Path:  # 返回输出目录路径
     input_dir = input_dir or RAW_DIR  # 默认输入目录
     output_dir = output_dir or FILTERED_DIR  # 默认输出目录
@@ -187,6 +206,8 @@ def run_filter(  # 依次执行交易、商品、用户三步过滤
         min_user_purchases=min_user_purchases,  # 最少购买次数
         max_user_behaviors=max_user_behaviors,  # 最大行为数
         weeks=weeks,  # 周数
+        valid_weeks=valid_weeks,
+        test_weeks=test_weeks,
     )  # 结束 filter_transactions 调用
     filter_articles(tx_path, input_path=input_dir / "articles.csv", output_dir=output_dir)  # 过滤商品表
     filter_customers(tx_path, input_path=input_dir / "customers.csv", output_dir=output_dir)  # 过滤用户表
@@ -201,6 +222,8 @@ def main() -> None:  # CLI 入口
     parser.add_argument("--min-user-purchases", type=int, default=MIN_USER_PURCHASES)  # 最少购买次数参数
     parser.add_argument("--max-user-behaviors", type=int, default=MAX_USER_BEHAVIORS)  # 最大行为数参数
     parser.add_argument("--weeks", type=int, default=WEEKS)  # 周数参数
+    parser.add_argument("--valid-weeks", type=int, default=VALID_WEEKS)
+    parser.add_argument("--test-weeks", type=int, default=TEST_WEEKS)
     args = parser.parse_args()  # 解析命令行参数
 
     run_filter(  # 执行完整过滤流程
@@ -210,6 +233,8 @@ def main() -> None:  # CLI 入口
         min_user_purchases=args.min_user_purchases,  # 传入最少购买次数
         max_user_behaviors=args.max_user_behaviors,  # 传入最大行为数
         weeks=args.weeks,  # 传入周数
+        valid_weeks=args.valid_weeks,
+        test_weeks=args.test_weeks,
     )  # 结束 run_filter 调用
 
 

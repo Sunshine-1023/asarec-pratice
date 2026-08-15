@@ -37,8 +37,8 @@ def _default_input_path() -> Path:  # 选择默认输入交易文件路径
 def load_transactions(  # 加载并预处理交易为 RecBole 列格式
     path: Path | None = None,  # 输入 CSV 路径
     weeks: int = WEEKS,  # 时间窗口周数
-    min_user_purchases: int = MIN_USER_PURCHASES,  # 用户最少购买次数
-    max_user_history: int = MAX_USER_HISTORY,  # 每用户保留最近 N 条购买记录
+    min_user_purchases: int = MIN_USER_PURCHASES,  # 兼容旧参数；正式过滤在时间切分后执行
+    max_user_history: int = MAX_USER_HISTORY,  # 兼容旧参数；历史在使用时截断
 ) -> pd.DataFrame:  # 返回含 RecBole 字段名的 DataFrame
     path = path or _default_input_path()  # 解析默认输入路径
     df = pd.read_csv(  # 读取交易 CSV
@@ -52,19 +52,8 @@ def load_transactions(  # 加载并预处理交易为 RecBole 列格式
     min_date = _week_window_start(max_date, weeks)  # 计算窗口起始日期
     df = df[df["t_dat"].dt.normalize() >= min_date]  # 保留最近 weeks 周
 
-    user_cnt = df["customer_id"].value_counts()  # 统计各用户交互次数
-    valid_users = user_cnt[user_cnt >= min_user_purchases].index  # 达到阈值的用户索引
-    df = df[df["customer_id"].isin(valid_users)]  # 只保留有效用户
-
-    df = df.sort_values(["customer_id", "t_dat"])  # 按用户和时间排序
-    before_truncate = len(df)  # 截断前行数
-    df = df.groupby("customer_id", sort=False).tail(max_user_history)  # 每用户只保留最近 N 条
-    truncated_rows = before_truncate - len(df)  # 被截断删除的行数
-    if truncated_rows > 0:  # 有截断时打印统计
-        print(  # 打印截断统计信息
-            f"Truncated to last {max_user_history} purchases per user "  # 截断说明前缀
-            f"({truncated_rows:,} rows removed)"  # 删除行数
-        )  # 结束截断统计打印
+    # 不在切分前用未来总购买次数筛用户，也不提前删除历史。  # valid/test 不得改变训练数据
+    df = df.sort_values(["customer_id", "t_dat", "article_id"], kind="mergesort")  # 稳定时间顺序
 
     df["timestamp"] = (df["t_dat"] - pd.Timestamp("1970-01-01")) // pd.Timedelta(seconds=1)  # 转为 Unix 秒时间戳
 

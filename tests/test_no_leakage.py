@@ -13,6 +13,7 @@ from src.data.split import (  # 切分与 as-of 特征
     user_item_counts_as_of,  # 用户偏好
     validate_time_split,  # 时间因果
 )  # 导入结束
+from src.data.filter import fit_train_item_universe
 from src.recall.popular import build_popular_index  # 热门索引
 
 
@@ -84,3 +85,23 @@ def test_as_of_features_ignore_label_week() -> None:  # 热度与用户偏好必
     assert popularity == {"hist": 2}  # 只统计历史两次
     assert prefs == {("u1", "hist"): 2}  # 标签周商品不进入用户偏好
     assert "label_only" not in popularity  # 明确不读标签周
+
+
+def test_optional_item_sampling_is_fitted_on_train_only() -> None:
+    transactions = pd.DataFrame(
+        {
+            "customer_id": ["u1"] * 8,
+            "article_id": ["train_item", "train_item", *(["future_hot"] * 6)],
+            "t_dat": ["2020-09-01", "2020-09-02", *(["2020-09-10"] * 6)],
+        }
+    )
+
+    selected = fit_train_item_universe(
+        transactions,
+        window_start=pd.Timestamp("2020-08-13"),
+        valid_start=pd.Timestamp("2020-09-09"),
+        top_items=1,
+    )
+
+    assert selected == {"train_item"}
+    assert "future_hot" not in selected

@@ -71,3 +71,8 @@ class RunArtifacts:  # 一次实验的全部产物目录
     def metrics_file(self, split: str) -> Path:  # 指标文件
         return self.evaluation / f"{str(split).strip().lower()}_metrics.json"  # 路径
 
+    def selected_checkpoint_file(self, model: str) -> Path:
+        return self.checkpoints / f"{str(model).strip().lower()}_selected.pth"
+
+    def checkpoint_selection_file(self, model: str) -> Path:
+        return self.evaluation / f"{str(model).strip().lower()}_checkpoint_selection.json"

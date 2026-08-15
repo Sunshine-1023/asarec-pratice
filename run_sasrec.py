@@ -7,7 +7,7 @@ from pathlib import Path  # 导入路径处理类
 import torch  # 导入 PyTorch 深度学习框架
 
 from src.data.preprocess import build_inter_file  # 构建交互文件
-from src.data.split import split_by_time  # 按时间划分数据集
+from src.data.split import build_model_train_split, split_by_time  # 按时间划分并创建训练专用子集
 from src.data.build_item_features import build_item_features  # 构建 hm_seq.item 商品特征文件
 from src.data.build_sequences import (  # 兼容旧入口导出的数据准备函数与路径
     RECB_TEST_FILE,
@@ -22,6 +22,7 @@ from src.data.build_sequences import (  # 兼容旧入口导出的数据准备�
     _read_max_item_list_length,
     prepare_recbole_benchmark_files,
 )
+from src.training.checkpoints import install_improving_checkpoint_snapshots
 
 
 def _read_model_name(config_path: Path) -> str:  # 从配置文件读取模型名称
@@ -79,12 +80,18 @@ def _patch_tqdm_single_line() -> None:  # 强制 tqdm 在单行内更新进度�
     tqdm_cls._single_line_patch_applied = True  # 标记补丁已应用
 
 
-def run_sasrec_with_device(  # 在选定设备上运行 SASRec 训练与评估
+def fit_model_without_test_evaluation(trainer, train_data, valid_data, *, show_progress: bool):
+    """Fit and select coarse checkpoints on validation only; test is not accepted."""
+    return trainer.fit(train_data, valid_data, saved=True, show_progress=show_progress)
+
+
+def run_sasrec_with_device(  # 在选定设备上运行 SASRec 训练与验证
     config_path: Path,  # 配置文件路径
     model_name: str,  # 模型名称
     seed: int | None = None,  # 可选随机种子
     checkpoint_dir: Path | None = None,  # 可选 run-scoped checkpoint 目录
-) -> tuple[float, dict, dict]:  # 返回最佳验证分数、验证结果与测试结果
+    checkpoint_shortlist_size: int = 5,
+) -> tuple[float, dict, list[str]]:  # 返回 RecBole 验证结果与粗筛 checkpoint 列表
     from src.pytorch_compat import patch_recbole_compat  # 仅训练时需要 RecBole 兼容补丁
 
     patch_recbole_compat()  # 在导入 RecBole 前应用兼容补丁
@@ -121,22 +128,28 @@ def run_sasrec_with_device(  # 在选定设备上运行 SASRec 训练与评估
     logger.info(f"Seed: {config['seed']}")  # 记录随机种子
 
     dataset = create_dataset(config)  # 创建数据集
-    train_data, valid_data, test_data = data_preparation(config, dataset)  # 划分训练/验证/测试数据
+    train_data, valid_data, _test_data = data_preparation(config, dataset)  # test 仅由 RecBole 构建，不在训练阶段评估
 
     init_seed(config["seed"] + config["local_rank"], config["reproducibility"])  # 再次初始化种子保证可复现
     model = get_model(config["model"])(config, train_data._dataset).to(config["device"])  # 创建模型并移至设备
     trainer = get_trainer(config["MODEL_TYPE"], config["model"])(config, model)  # 创建训练器
-    best_valid_score, best_valid_result = trainer.fit(  # 训练模型
-        train_data, valid_data, saved=True, show_progress=config["show_progress"]  # 训练参数
-    )  # 训练完成，返回最佳验证分数与结果
-    test_result = trainer.evaluate(  # 在测试集上评估
-        test_data, load_best_model=True, show_progress=config["show_progress"]  # 评估参数
-    )  # 评估完成
+    shortlist_dir = Path(config["checkpoint_dir"]) / f"shortlist_seed_{config['seed']}"
+    snapshots = install_improving_checkpoint_snapshots(
+        trainer,
+        shortlist_dir,
+        max_candidates=checkpoint_shortlist_size,
+    )
+    best_valid_score, best_valid_result = fit_model_without_test_evaluation(
+        trainer,
+        train_data,
+        valid_data,
+        show_progress=config["show_progress"],
+    )
 
     logger.info(f"best valid score: {best_valid_score}")  # 记录最佳验证分数
     logger.info(f"best valid result: {best_valid_result}")  # 记录最佳验证结果
-    logger.info(f"test result: {test_result}")  # 记录测试结果
-    return best_valid_score, best_valid_result, test_result  # 返回训练与评估结果
+    logger.info(f"checkpoint shortlist: {[str(path) for path in snapshots]}")
+    return best_valid_score, best_valid_result, [str(path.resolve()) for path in snapshots]
 
 
 def _parse_seeds(seed: int | None, seeds: str | None) -> list[int]:  # 解析单种子或多种子参数
@@ -161,6 +174,12 @@ def main():  # 命令行入口函数
     parser.add_argument("--seed", type=int, default=None, help="Run one custom seed")  # 单种子参数
     parser.add_argument("--checkpoint-dir", type=Path, default=None, help="Override RecBole checkpoint directory")
     parser.add_argument(
+        "--checkpoint-shortlist-size",
+        type=int,
+        default=5,
+        help="Keep the latest N RecBole-valid improving checkpoints for user-week selection",
+    )
+    parser.add_argument(
         "--report-path",
         type=Path,
         default=Path("outputs/evaluation/sasrec_multi_seed_results.json"),
@@ -183,6 +202,7 @@ def main():  # 命令行入口函数
     if not args.skip_preprocess:  # 未跳过预处理时
         build_inter_file()  # 构建交互文件
         split_by_time()  # 按时间划分数据集
+        build_model_train_split()  # 仅用 train 活跃度筛选模型拟合行
 
     max_item_list_length = _read_max_item_list_length(config_path)  # 读取最大序列长度
     prepare_recbole_benchmark_files(max_item_list_length)  # 准备 RecBole 基准文件
@@ -193,20 +213,29 @@ def main():  # 命令行入口函数
 
     seed_list = _parse_seeds(args.seed, args.seeds)  # 解析种子列表
     if not seed_list:  # 未指定种子时单次运行
-        run_sasrec_with_device(config_path, model_name=model_name, checkpoint_dir=args.checkpoint_dir)  # 使用默认种子训练
+        run_sasrec_with_device(
+            config_path,
+            model_name=model_name,
+            checkpoint_dir=args.checkpoint_dir,
+            checkpoint_shortlist_size=args.checkpoint_shortlist_size,
+        )
         return  # 直接返回
 
     all_results: list[dict] = []  # 初始化多种子结果列表
     for run_seed in seed_list:  # 遍历每个种子
-        best_valid_score, best_valid_result, test_result = run_sasrec_with_device(  # 以当前种子训练评估
-            config_path, model_name=model_name, seed=run_seed, checkpoint_dir=args.checkpoint_dir  # 传入配置、模型名与种子
+        best_valid_score, best_valid_result, checkpoint_candidates = run_sasrec_with_device(  # 以当前种子训练验证
+            config_path,
+            model_name=model_name,
+            seed=run_seed,
+            checkpoint_dir=args.checkpoint_dir,
+            checkpoint_shortlist_size=args.checkpoint_shortlist_size,
         )  # 单次种子运行完成
         all_results.append(  # 追加当前种子结果
             {  # 结果字典
                 "seed": run_seed,  # 当前种子值
                 "best_valid_score": float(best_valid_score),  # 最佳验证分数
                 "best_valid_result": _metrics_to_float_dict(best_valid_result),  # 最佳验证指标
-                "test_result": _metrics_to_float_dict(test_result),  # 测试集指标
+                "checkpoint_candidates": checkpoint_candidates,
             }  # 结果字典结束
         )  # 追加完成
 

@@ -29,13 +29,15 @@ src/pipeline + src/experiment（编排、配置、运行目录）
 - 商品 ID：内部统一为十位字符串，例如 `706016001` 与 `0706016001` 都映射为 `0706016001`。
 - 候选记录：固定包含 `user_id`、`item_id`、`channel`、`score`、`rank`、`split`。
 - 候选并集：同一用户、商品、通道仅保留一条证据；同一商品来自多个通道时保留多路证据，供融合或学习排序使用。
-- 时间因果：valid 只使用 train 历史；test 使用 train + valid 历史；标签周不能进入召回索引。
+- 时间因果：切分前不按未来总活跃度筛用户或截断历史；可选 Top-item 集合只在 train 拟合。`hm.model_train.inter` 仅负责模型拟合资格，完整 `hm.train.inter` 仍供 valid 历史与冷启动评估使用。
+- checkpoint 口径：RecBole valid 指标只负责保留至多 5 个改善 checkpoint；最终模型只按完整 valid 用户周的 MAP@12 选择，不读取 test 标签。
 
 ## 正式流水线
 
 ```text
 数据准备
   → SASRecF 训练
+  → valid 用户周 MAP@12 选择 checkpoint
   → SASRecF valid/test 召回
   → 规则召回 + 四路候选物化
   → valid 权重搜索
@@ -52,12 +54,14 @@ outputs/runs/<run_id>/
 ├── resolved_config.json
 ├── manifest.json
 ├── checkpoints/sasrecf/
+├── checkpoints/sasrecf_selected.pth
 ├── recall/
 ├── candidates/
 │   ├── valid.csv
 │   └── test.csv
 ├── ranking/
 ├── evaluation/
+│   └── sasrecf_checkpoint_selection.json
 └── logs/
 ```
 
@@ -78,4 +82,3 @@ python run_pipeline.py --with-filter
 ```
 
 调试旧产物时可使用 `--no-strict`；恢复指定实验时使用 `--run-id <id>`。为了避免不同实验串用文件，正式结果不要从 `outputs/recommendations` 或 `outputs/evaluation` 手工拼接。
-

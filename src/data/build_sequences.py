@@ -13,12 +13,29 @@ from src.domain.ids import canonical_item_id, canonical_user_id  # 统一 ID 契
 
 SOURCE_DIR = Path("data/processed/hm")  # 原始划分数据目录
 TARGET_DIR = Path("data/processed/hm_seq")  # 序列化数据输出目录
-TRAIN_SPLIT_FILE = SOURCE_DIR / "hm.train.inter"  # 训练集划分文件
+TRAIN_HISTORY_FILE = SOURCE_DIR / "hm.train.inter"  # valid 预测可见的完整 train 历史
+TRAIN_SPLIT_FILE = SOURCE_DIR / "hm.model_train.inter"  # 模型拟合使用的 train-only 活跃用户子集
 VALID_SPLIT_FILE = SOURCE_DIR / "hm.valid.inter"  # 验证集划分文件
 TEST_SPLIT_FILE = SOURCE_DIR / "hm.test.inter"  # 测试集划分文件
 RECB_TRAIN_FILE = TARGET_DIR / "hm_seq.train.inter"  # RecBole 训练文件
 RECB_VALID_FILE = TARGET_DIR / "hm_seq.valid.inter"  # RecBole 验证文件
 RECB_TEST_FILE = TARGET_DIR / "hm_seq.test.inter"  # RecBole 测试文件
+
+
+def load_history_map(path: Path) -> dict[str, list[str]]:  # 从完整历史文件构建用户序列
+    frame = pd.read_csv(
+        path,
+        sep="\t",
+        usecols=["user_id:token", "item_id:token", "timestamp:float"],
+        dtype={"user_id:token": "string", "item_id:token": "string"},
+    )
+    frame["user_id:token"] = frame["user_id:token"].map(canonical_user_id)
+    frame["item_id:token"] = frame["item_id:token"].map(canonical_item_id)
+    frame = frame.sort_values(["user_id:token", "timestamp:float", "item_id:token"], kind="mergesort")
+    history: dict[str, list[str]] = defaultdict(list)
+    for user_id, item_id in frame[["user_id:token", "item_id:token"]].itertuples(index=False, name=None):
+        history[user_id].append(item_id)
+    return history
 
 
 def convert_to_sequence_samples(  # 将一个划分转换为因果序列样本
@@ -78,9 +95,15 @@ def prepare_recbole_benchmark_files(  # 构建 train/valid/test 三个序列文�
     valid_split_file: Path = VALID_SPLIT_FILE,
     test_split_file: Path = TEST_SPLIT_FILE,
     target_dir: Path = TARGET_DIR,
+    train_history_file: Path | None = None,  # 自定义 fixture 默认复用 train_split
 ) -> tuple[Path, Path, Path]:
     """Build benchmark files without importing or initializing RecBole."""  # 纯数据准备边界
-    sources = (train_split_file, valid_split_file, test_split_file)  # 三个源划分
+    resolved_train_history = (
+        TRAIN_HISTORY_FILE
+        if train_history_file is None and train_split_file == TRAIN_SPLIT_FILE
+        else (train_history_file or train_split_file)
+    )
+    sources = (train_split_file, valid_split_file, test_split_file, resolved_train_history)  # 模型 train、两标签周与完整历史
     for path in sources:
         if not path.exists():
             raise FileNotFoundError(f"Missing {path}. Run preprocessing/splitting first.")
@@ -96,6 +119,7 @@ def prepare_recbole_benchmark_files(  # 构建 train/valid/test 三个序列文�
     train_rows = convert_to_sequence_samples(  # train 内滚动
         sources[0], targets[0], history_map, max_item_list_length, True, False
     )
+    history_map = defaultdict(list, load_history_map(resolved_train_history))  # valid 使用完整 train 历史
     valid_rows = convert_to_sequence_samples(  # valid 内不滚动，结束后纳入 test 历史
         sources[1], targets[1], history_map, max_item_list_length, False, True
     )

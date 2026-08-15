@@ -24,6 +24,7 @@ FashionRec-Transformer/
 │   ├── recall/                     # 通道接口、注册表与统一候选生成
 │   ├── candidates/                 # 候选并集、去重与物化
 │   ├── ranking/                    # Weighted RRF 与 LightGBM 特征边界
+│   ├── training/                   # checkpoint 粗筛与 valid 用户周选择
 │   ├── evaluate/                   # 指标、权重搜索与评估报告
 │   ├── experiment/                 # 统一配置、运行上下文与产物路径
 │   ├── pipeline/                   # 配置驱动的流水线编排
@@ -32,10 +33,11 @@ FashionRec-Transformer/
 ├── run_pipeline.py                 # 一键按顺序跑全流程
 ├── run_data_prep.py                # ① 数据准备
 ├── run_sasrecf.py                  # ② 训练 SASRecF
-├── run_sasrecf_recall.py           # ③ 导出 SASRecF 召回
-├── run_rule_recall.py              # ④ 规则召回与四路候选物化
-├── run_fusion_weight_search.py     # ⑤ valid 权重搜索
-├── run_offline_eval.py             # ⑥ 融合 + MAP@12 评估
+├── run_select_checkpoint.py        # ③ valid 用户周 MAP@12 选择 checkpoint
+├── run_sasrecf_recall.py           # ④ 导出 SASRecF 召回
+├── run_rule_recall.py              # ⑤ 规则召回与四路候选物化
+├── run_fusion_weight_search.py     # ⑥ valid 权重搜索
+├── run_offline_eval.py             # ⑦ 融合 + MAP@12 评估
 ├── run_sasrec.py                   # v1 对照：训练 SASRec
 ├── requirements.txt
 └── README.md
@@ -49,10 +51,11 @@ FashionRec-Transformer/
 |------|------|------|------|
 | ① | `run_data_prep.py` | filter（可选）→ preprocess → split → hm_seq → item 特征 | ✅ |
 | ② | `run_sasrecf.py` | 训练 SASRecF | ✅ |
-| ③ | `run_sasrecf_recall.py` | 导出 `sasrecf_valid.csv` / `sasrecf_test.csv` | ✅ |
-| ④ | `run_rule_recall.py` | 规则召回 + 四路候选并集物化 | ✅ |
-| ⑤ | `run_fusion_weight_search.py` | valid 上网格搜融合权重 | ✅ |
-| ⑥ | `run_offline_eval.py` | 四路融合 + MAP@12（先 valid，再 test） | ✅ |
+| ③ | `run_select_checkpoint.py` | 完整 valid 用户周 MAP@12 选择 checkpoint | ✅ |
+| ④ | `run_sasrecf_recall.py` | 使用选定模型导出 valid/test 召回 | ✅ |
+| ⑤ | `run_rule_recall.py` | 规则召回 + 四路候选并集物化 | ✅ |
+| ⑥ | `run_fusion_weight_search.py` | valid 上网格搜融合权重 | ✅ |
+| ⑦ | `run_offline_eval.py` | 四路融合 + MAP@12（test 只在最终阶段评估） | ✅ |
 
 ### 一键跑全流程
 
@@ -67,7 +70,7 @@ python run_pipeline.py --with-filter
 
 - `--run-id <id>`：继续使用指定运行目录
 - `--no-strict`：允许旧流程的兼容回退
-- `--skip-data-prep` / `--skip-train` / `--skip-recall` / `--skip-candidates` / `--skip-weight-search`：跳过对应步骤
+- `--skip-data-prep` / `--skip-train` / `--skip-checkpoint-selection` / `--skip-recall` / `--skip-candidates` / `--skip-weight-search`：跳过对应步骤
 
 ### 逐步手动执行
 
@@ -75,9 +78,14 @@ python run_pipeline.py --with-filter
 conda activate dl
 
 python run_data_prep.py --with-filter
-python run_sasrecf.py --skip-preprocess
-python run_sasrecf_recall.py --eval-split valid
-python run_sasrecf_recall.py --eval-split test
+python run_sasrecf.py --skip-preprocess --checkpoint-dir outputs/checkpoints/sasrecf
+python run_select_checkpoint.py \
+  --checkpoint-dir outputs/checkpoints/sasrecf \
+  --recall-dir outputs/recommendations/checkpoint_selection \
+  --output-json outputs/evaluation/sasrecf_checkpoint_selection.json \
+  --selected-model-path outputs/checkpoints/sasrecf_selected.pth
+python run_sasrecf_recall.py --eval-split valid --model-file outputs/checkpoints/sasrecf_selected.pth
+python run_sasrecf_recall.py --eval-split test --model-file outputs/checkpoints/sasrecf_selected.pth
 python run_fusion_weight_search.py
 python run_offline_eval.py --eval-split valid
 python run_offline_eval.py --eval-split test \
@@ -101,8 +109,8 @@ python run_offline_eval.py --eval-split test \
 ## 核心流程
 
 ```
-filter → preprocess → split → hm_seq → hm_seq.item
-    → 训练 SASRecF → 导出 sasrecf_{valid,test}.csv
+filter（train 拟合商品集）→ preprocess → split → model_train → hm_seq → hm_seq.item
+    → 训练 SASRecF → valid 用户周 MAP@12 选 checkpoint → 导出 sasrecf_{valid,test}.csv
     → 四路 Candidate 物化 → Weighted RRF / LightGBM 排序边界
     → valid 权重搜索 → offline_eval（MAP@12）
 ```
@@ -121,7 +129,8 @@ filter → preprocess → split → hm_seq → hm_seq.item
 | 参数 | 值 | 位置 |
 |------|-----|------|
 | 数据窗口 | 6 周（4+1+1） | `filter.py` / `preprocess.py` / `split.py` |
-| 每用户最长行为 | 100 | 各 data / fusion 模块 |
+| 每用户最长行为 | 使用时截断至 100，不在切分前删行 | 序列 / 召回上下文 |
+| checkpoint 粗筛 | 最近 5 个 RecBole-valid 改善点 | `configs/experiment.yaml` |
 | 序列最大长度 | 100 | `configs/sasrecf.yaml` |
 | 召回 Top-K | 100 → 融合 Top-12 | 召回 + `offline_eval.py` |
 | 主指标 | MAP@12 | `offline_eval.py` |
@@ -194,7 +203,7 @@ python run_offline_eval.py --eval-split test \
 
 | 目录 / 文件 | 职责 |
 |-------------|------|
-| `src/data/filter.py` | 原始数据过滤（时间窗 / Top item / 活跃用户） |
+| `src/data/filter.py` | 时间窗过滤与 train-only Top-item 商品集合拟合 |
 | `src/data/preprocess.py` | CSV → `hm.inter` |
 | `src/data/split.py` | 按周切分 train / valid / test |
 | `src/data/build_item_features.py` | `articles.csv` → `hm_seq.item` |
@@ -209,6 +218,8 @@ python run_offline_eval.py --eval-split test \
 | `src/candidates/union.py` | 候选去重与并集上限 |
 | `src/ranking/weighted_rrf.py` | 按活跃度加权 RRF 排序 |
 | `src/ranking/features.py` | LightGBM LambdaRank 特征表 |
+| `src/training/checkpoints.py` | 保留 RecBole-valid 改善 checkpoint 粗筛集合 |
+| `src/training/checkpoint_selection.py` | 按完整 valid 用户周 MAP@12 选择模型 |
 | `src/evaluate/weight_search.py` | valid 集权重网格搜索 |
 | `src/evaluate/offline_eval.py` | 四路融合 + 离线 MAP@12 |
 | `src/pipeline/orchestrator.py` | 配置驱动的 run-scoped 阶段编排 |

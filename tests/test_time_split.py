@@ -9,6 +9,7 @@ import pytest  # 断言
 
 from src.data.split import (  # 切分
     INTERACTION_SORT_COLUMNS,  # 排序键
+    build_model_train_split,
     history_paths_for_eval,  # 历史路径
     sort_interactions,  # 确定性排序
     split_by_time,  # 切分
@@ -98,3 +99,21 @@ def test_history_paths_for_eval() -> None:  # valid 只用 train，test 用 trai
     assert history_paths_for_eval("test", train, valid) == [train, valid]  # 测试评估
     with pytest.raises(ValueError):  # 非法划分
         history_paths_for_eval("train", train, valid)  # 不允许
+
+
+def test_model_train_eligibility_uses_only_train_and_preserves_full_train(tmp_path: Path) -> None:
+    train_path = tmp_path / "hm.train.inter"
+    output_path = tmp_path / "hm.model_train.inter"
+    rows = [
+        ("eligible", "1", "2020-08-20", 12),
+        ("eligible", "2", "2020-08-21", 12),
+        ("train_low", "3", "2020-08-22", 12),
+    ]
+    _write_inter(train_path, rows)
+    original = train_path.read_text(encoding="utf-8")
+
+    build_model_train_split(train_path, output_path, min_user_purchases=2)
+
+    model_train = pd.read_csv(output_path, sep="\t", dtype="string")
+    assert set(model_train["user_id:token"]) == {"eligible"}
+    assert train_path.read_text(encoding="utf-8") == original

@@ -26,6 +26,7 @@ def test_default_experiment_config_loads() -> None:  # 默认 YAML 能加载且�
     assert config.data.total_weeks == 6  # 总周数
     assert config.data.max_user_history == 100  # 历史上限
     assert config.data.min_user_purchases == 5  # 最少购买
+    assert config.model_selection.checkpoint_shortlist_size == 5
     assert config.candidate.final_top_k == 12  # 最终 K
     assert config.candidate.union_top_k == 300  # 并集上限
     assert config.evaluation.primary_metric == "MAP@12"  # 主指标
@@ -59,6 +60,7 @@ def test_optional_fields_have_defaults(tmp_path: Path) -> None:  # 缺省字段�
     assert config.data.backtest_windows == 3  # 回测窗口默认 3
     assert config.candidate.popular_top_k == 100  # 未写时回退 per_channel_top_k
     assert config.evaluation.primary_metric == "MAP@12"  # 主指标默认
+    assert config.model_selection.checkpoint_shortlist_size == 5
 
 
 def test_missing_required_field_raises(tmp_path: Path) -> None:  # 缺必填字段报错

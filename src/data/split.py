@@ -14,6 +14,7 @@ PROCESSED_DIR = Path("data/processed")  # 处理后数据目录
 DATASET_DIR = PROCESSED_DIR / "hm"  # hm 数据集子目录
 INTER_FILE = DATASET_DIR / "hm.inter"  # 完整交互文件路径
 TRAIN_INTER_FILE = DATASET_DIR / "hm.train.inter"  # 训练集交互文件路径
+MODEL_TRAIN_INTER_FILE = DATASET_DIR / "hm.model_train.inter"  # 模型拟合专用的 train 活跃用户子集
 VALID_INTER_FILE = DATASET_DIR / "hm.valid.inter"  # 验证集交互文件路径
 TEST_INTER_FILE = DATASET_DIR / "hm.test.inter"  # 测试集交互文件路径
 
@@ -164,6 +165,39 @@ def split_bounds_dict(result: TimeSplitResult) -> dict[str, str]:  # 将切分�
         "test_start": str(result.test_start.date()),  # 测试起
         "test_end": str(result.test_end.date()),  # 测试止
     }  # 边界字典结束
+
+
+def build_model_train_split(  # 只使用 train 统计活跃用户
+    train_path: Path = TRAIN_INTER_FILE,
+    output_path: Path = MODEL_TRAIN_INTER_FILE,
+    min_user_purchases: int = 5,
+) -> Path:
+    if min_user_purchases < 1:
+        raise ValueError("min_user_purchases must be >= 1")
+    train = pd.read_csv(
+        train_path,
+        sep="\t",
+        dtype={"user_id:token": "string", "item_id:token": "string"},
+    )
+    train = sort_interactions(train)
+    counts = train["user_id:token"].value_counts()
+    eligible_users = set(counts[counts >= min_user_purchases].index)
+    model_train = train[train["user_id:token"].isin(eligible_users)].copy()
+    if model_train.empty:
+        raise ValueError(
+            f"No model-train interactions remain with min_user_purchases={min_user_purchases}"
+        )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    model_train[["user_id:token", "item_id:token", "timestamp:float"]].to_csv(
+        output_path,
+        sep="\t",
+        index=False,
+    )
+    print(
+        f"Model train rows: {len(model_train):,}/{len(train):,}; "
+        f"eligible users: {len(eligible_users):,} (train-only threshold >= {min_user_purchases})"
+    )
+    return output_path
 
 
 def split_by_time(  # 按时间窗口切分交互数据

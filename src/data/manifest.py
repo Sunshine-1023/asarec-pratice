@@ -148,10 +148,11 @@ def build_processed_hm_manifest(  # 针对当前 hm 处理后数据生成清单
         "raw_or_filtered_transactions": raw_transactions or Path("data/raw/filtered/transactions_train.csv"),  # 输入交易
         "hm.inter": hm_dir / "hm.inter",  # 全量交互
         "hm.train.inter": hm_dir / "hm.train.inter",  # 训练集
+        "hm.model_train.inter": hm_dir / "hm.model_train.inter",  # 模型拟合子集
         "hm.valid.inter": hm_dir / "hm.valid.inter",  # 验证集
         "hm.test.inter": hm_dir / "hm.test.inter",  # 测试集
     }  # 文件映射结束
-    inter_names = ["hm.inter", "hm.train.inter", "hm.valid.inter", "hm.test.inter"]  # 需要流式统计的交互
+    inter_names = ["hm.inter", "hm.train.inter", "hm.model_train.inter", "hm.valid.inter", "hm.test.inter"]  # 需要流式统计的交互
     return build_manifest(  # 组装清单
         files=files,  # 文件映射
         inter_files=inter_names,  # 交互统计

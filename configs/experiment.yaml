@@ -13,6 +13,9 @@ data:
   max_user_history: 100
   min_user_purchases: 5
 
+model_selection:
+  checkpoint_shortlist_size: 5
+
 candidate:
   per_channel_top_k: 100
   popular_top_k: 50
