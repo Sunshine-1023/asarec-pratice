@@ -1,1 +1,1 @@
-# 项目源码包初始化文件
+"""FashionRec-Transformer source package."""  # 项目源码包

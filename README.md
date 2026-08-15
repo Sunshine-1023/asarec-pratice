@@ -1,6 +1,7 @@
 # FashionRec-Transformer
 
 > 📖 **完整项目指南（推荐先读）：** [docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md)  
+> 📊 **成果图表（答辩/PPT 用）：** [outputs/figures/README.md](outputs/figures/README.md)
 > 从零讲清数据 → 训练 → 四路召回 → 融合 → 评估 → 权重搜索全流程。
 
 基于 [H&M 交易数据](https://www.kaggle.com/competitions/h-and-m-personalized-fashion-recommendations) 的时尚推荐项目。当前**主实验线**为 **SASRecF**（带商品类别特征）+ **四路离线召回融合**（Popular / Category Popular / Item2Item / SASRecF），按用户活跃度自适应加权，最终以 **Offline MAP@12** 作为主评估口径。
@@ -18,16 +19,21 @@ FashionRec-Transformer/
 ├── docs/                           # 实验报告与入门指南
 ├── outputs/                        # checkpoint / 召回 CSV / 评估 JSON
 ├── src/
-│   ├── data/                       # 数据过滤、预处理、切分、商品特征
-│   ├── recall/                     # 各路召回与 CSV 导出
-│   ├── fusion/                     # 多通道加权融合
-│   ├── evaluate/                   # 离线评估与权重搜索
+│   ├── domain/                     # 商品 ID 与 Candidate 数据契约
+│   ├── data/                       # 数据过滤、切分、序列样本、商品特征
+│   ├── recall/                     # 通道接口、注册表与统一候选生成
+│   ├── candidates/                 # 候选并集、去重与物化
+│   ├── ranking/                    # Weighted RRF 与 LightGBM 特征边界
+│   ├── evaluate/                   # 指标、权重搜索与评估报告
+│   ├── experiment/                 # 统一配置、运行上下文与产物路径
+│   ├── pipeline/                   # 配置驱动的流水线编排
+│   ├── fusion/                     # 旧融合 API（兼容层）
 │   └── pytorch_compat.py           # PyTorch / NumPy 兼容补丁
 ├── run_pipeline.py                 # 一键按顺序跑全流程
 ├── run_data_prep.py                # ① 数据准备
 ├── run_sasrecf.py                  # ② 训练 SASRecF
 ├── run_sasrecf_recall.py           # ③ 导出 SASRecF 召回
-├── run_rule_recall.py              # ④ 规则三路召回导出（可选）
+├── run_rule_recall.py              # ④ 规则召回与四路候选物化
 ├── run_fusion_weight_search.py     # ⑤ valid 权重搜索
 ├── run_offline_eval.py             # ⑥ 融合 + MAP@12 评估
 ├── run_sasrec.py                   # v1 对照：训练 SASRec
@@ -44,7 +50,7 @@ FashionRec-Transformer/
 | ① | `run_data_prep.py` | filter（可选）→ preprocess → split → hm_seq → item 特征 | ✅ |
 | ② | `run_sasrecf.py` | 训练 SASRecF | ✅ |
 | ③ | `run_sasrecf_recall.py` | 导出 `sasrecf_valid.csv` / `sasrecf_test.csv` | ✅ |
-| ④ | `run_rule_recall.py` | 导出 Popular / Category Popular / Item2Item CSV | 可选 |
+| ④ | `run_rule_recall.py` | 规则召回 + 四路候选并集物化 | ✅ |
 | ⑤ | `run_fusion_weight_search.py` | valid 上网格搜融合权重 | ✅ |
 | ⑥ | `run_offline_eval.py` | 四路融合 + MAP@12（先 valid，再 test） | ✅ |
 
@@ -55,10 +61,13 @@ conda activate dl
 python run_pipeline.py --with-filter
 ```
 
+正式流水线会创建 `outputs/runs/<run_id>/`，把配置快照、checkpoint、召回、候选、排序和指标隔离保存。完整依赖方向与数据契约见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+
 可选参数：
 
-- `--export-rule-recall`：在步骤 ③ 后额外导出规则三路召回 CSV
-- `--skip-data-prep` / `--skip-train` / `--skip-recall` / `--skip-weight-search`：跳过对应步骤
+- `--run-id <id>`：继续使用指定运行目录
+- `--no-strict`：允许旧流程的兼容回退
+- `--skip-data-prep` / `--skip-train` / `--skip-recall` / `--skip-candidates` / `--skip-weight-search`：跳过对应步骤
 
 ### 逐步手动执行
 
@@ -94,10 +103,11 @@ python run_offline_eval.py --eval-split test \
 ```
 filter → preprocess → split → hm_seq → hm_seq.item
     → 训练 SASRecF → 导出 sasrecf_{valid,test}.csv
+    → 四路 Candidate 物化 → Weighted RRF / LightGBM 排序边界
     → valid 权重搜索 → offline_eval（MAP@12）
 ```
 
-四路召回：**SASRecF**、**Popular**、**Category Popular**、**Item2Item**。融合时按用户历史长度分档（high / medium / low / cold_start），权重见 `src/fusion/weighted_fusion.py`。
+四路召回：**SASRecF**、**Popular**、**Category Popular**、**Item2Item**。融合时按用户历史长度分档（high / medium / low / cold_start）；默认排序实现位于 `src/ranking/weighted_rrf.py`。
 
 ### 两套切分逻辑
 
@@ -155,14 +165,13 @@ python run_sasrecf_recall.py --eval-split test
 
 输出：`outputs/recommendations/sasrecf_{valid,test}.csv`
 
-### ④ 规则三路召回（可选）
+### ④ 规则召回与候选物化
 
 ```bash
 python run_rule_recall.py --eval-split both
 ```
 
-输出：`popular_*.csv`、`category_popular_*.csv`、`item2item_*.csv`  
-`offline_eval` 会现场计算这三路，融合评估**不依赖**这些文件。
+旧命令输出 `popular_*.csv`、`category_popular_*.csv`、`item2item_*.csv` 和候选并集；正式流水线还会把 SASRecF 召回合入 `outputs/runs/<run_id>/candidates/{valid,test}.csv`，权重搜索与评估消费同一份固定候选。
 
 ### ⑤⑥ 权重搜索与融合评估
 
@@ -189,14 +198,20 @@ python run_offline_eval.py --eval-split test \
 | `src/data/preprocess.py` | CSV → `hm.inter` |
 | `src/data/split.py` | 按周切分 train / valid / test |
 | `src/data/build_item_features.py` | `articles.csv` → `hm_seq.item` |
+| `src/data/build_sequences.py` | 时间切分 → 因果序列样本 |
+| `src/domain/ids.py` | 用户与商品 ID 规范 |
+| `src/domain/candidates.py` | 跨召回/排序 Candidate schema |
 | `src/recall/popular.py` | 全局热门召回 |
 | `src/recall/category_popular.py` | 类别热门召回 |
 | `src/recall/item2item.py` | 商品共现召回 |
 | `src/recall/sasrec_recall.py` | SASRecF Top-K 导出 |
-| `src/recall/rule_recall_export.py` | 规则三路召回 CSV 导出 |
-| `src/fusion/weighted_fusion.py` | 按活跃度加权 rank 融合 |
+| `src/recall/generator.py` | 统一候选生成与物化 |
+| `src/candidates/union.py` | 候选去重与并集上限 |
+| `src/ranking/weighted_rrf.py` | 按活跃度加权 RRF 排序 |
+| `src/ranking/features.py` | LightGBM LambdaRank 特征表 |
 | `src/evaluate/weight_search.py` | valid 集权重网格搜索 |
 | `src/evaluate/offline_eval.py` | 四路融合 + 离线 MAP@12 |
+| `src/pipeline/orchestrator.py` | 配置驱动的 run-scoped 阶段编排 |
 
 ---
 

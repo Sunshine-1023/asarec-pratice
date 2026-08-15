@@ -1,0 +1,32 @@
+# 统一实验协议。改算法时只应改这里写明的字段，而不是各脚本各写一套。
+# 下列默认值对应当前主链路，作为之后所有优化的对照协议。
+
+experiment:
+  name: fashionrec_v3
+  seed: 2026
+
+data:
+  history_weeks: 4
+  valid_weeks: 1
+  test_weeks: 1
+  backtest_windows: 3
+  max_user_history: 100
+  min_user_purchases: 5
+
+candidate:
+  per_channel_top_k: 100
+  popular_top_k: 50
+  category_popular_top_k: 50
+  item2item_top_k: 50
+  sequence_top_k: 100
+  union_top_k: 300
+  final_top_k: 12
+
+evaluation:
+  primary_metric: MAP@12
+  protocol: offline_candidate_ranking
+  activity_tiers:
+    cold_start: [0, 0]
+    low: [1, 2]
+    medium: [3, 9]
+    high: [10, null]

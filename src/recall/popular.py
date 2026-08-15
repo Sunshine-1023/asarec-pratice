@@ -7,6 +7,8 @@ from pathlib import Path  # 导入路径处理类
 
 import pandas as pd  # 导入 pandas 用于读取交互数据
 
+from src.domain.ids import canonical_item_id  # 统一商品 ID 契约
+
 
 DEFAULT_INTER_PATH = Path("data/processed/hm/hm.train.inter")  # 默认训练集交互文件路径
 POPULAR_RECALL_TOP_K = 50  # 全局热门召回 Top-K
@@ -29,8 +31,9 @@ def _load_interactions(*inter_paths: str | Path) -> pd.DataFrame:  # 读取交�
             path,  # 交互文件路径
             sep="\t",  # 制表符分隔
             usecols=["item_id:token", "timestamp:float"],  # 仅读取商品 ID 与时间戳列
+            dtype={"item_id:token": "string"},  # 读取时保留前导零
         )  # 结束 read_csv 调用
-        df["item_id:token"] = df["item_id:token"].astype(str)  # 商品 ID 转字符串
+        df["item_id:token"] = df["item_id:token"].map(canonical_item_id)  # 商品 ID 统一为十位字符串
         df["date"] = pd.to_datetime(df["timestamp:float"], unit="s").dt.normalize()  # 时间戳转自然日
         frames.append(df[["item_id:token", "date"]])  # 只保留所需列
 

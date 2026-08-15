@@ -7,3 +7,5 @@ torch
 recbole
 fastapi
 uvicorn
+pyyaml
+pytest

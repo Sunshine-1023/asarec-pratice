@@ -7,6 +7,8 @@ from pathlib import Path  # 导入路径处理类
 
 import pandas as pd  # 导入 pandas
 
+from src.domain.ids import canonical_item_id, canonical_user_id  # 统一 ID 契约
+
 
 DEFAULT_INTER_PATH = Path("data/processed/hm/hm.train.inter")  # 默认训练集交互文件路径
 COOCCUR_WEEKS = 8  # 共现统计窗口（周，4~8 周取上限）
@@ -30,8 +32,10 @@ def _load_windowed_interactions(  # 读取并截取最近 N 周交互
             path,  # 交互文件路径
             sep="\t",  # 制表符分隔
             usecols=["user_id:token", "item_id:token", "timestamp:float"],  # 仅读取必要列
+            dtype={"user_id:token": "string", "item_id:token": "string"},  # 读取时保留 ID 文本
         )  # 结束 read_csv 调用
-        df["item_id:token"] = df["item_id:token"].astype(str)  # 商品 ID 转字符串
+        df["user_id:token"] = df["user_id:token"].map(canonical_user_id)  # 用户 ID 统一字符串
+        df["item_id:token"] = df["item_id:token"].map(canonical_item_id)  # 商品 ID 统一十位字符串
         df["date"] = pd.to_datetime(df["timestamp:float"], unit="s").dt.normalize()  # 转自然日
         frames.append(df)  # 追加到列表
 
@@ -101,7 +105,7 @@ def recall_item2item(  # 基于最近购买商品召回相似商品
     top_k: int = ITEM2ITEM_RECALL_TOP_K,  # 召回数量上限
 ) -> list[tuple[str, float]]:  # 返回商品 ID 与聚合分数列表
     """Recall by aggregating co-occurrence neighbors of the user's recent purchases."""  # 聚合最近购买商品的共现邻居进行召回
-    history_list = [str(x) for x in user_history]  # 规范化历史
+    history_list = [canonical_item_id(x) for x in user_history]  # 规范化历史
     if not history_list:  # 若无历史
         return []  # 返回空列表
 

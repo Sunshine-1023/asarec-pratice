@@ -8,10 +8,13 @@ import sys  # 导入系统模块以获取 Python 解释器路径
 import time  # 导入时间模块以统计步骤耗时
 from pathlib import Path  # 导入路径处理类
 
+from src.experiment.context import create_run_context  # 单次运行上下文
+from src.pipeline.orchestrator import PipelineOptions, build_pipeline_steps  # 纯编排计划
+
 ROOT = Path(__file__).resolve().parent  # 项目根目录（本脚本所在目录）
 
 
-def _run_step(step_no: int, total: int, title: str, cmd: list[str]) -> None:  # 执行单个流水线步骤并打印进度
+def _run_step(step_no: int, total: int, title: str, cmd: tuple[str, ...]) -> None:  # 执行单个流水线步骤并打印进度
     print(f"\n{'=' * 60}")  # 打印步骤分隔线
     print(f"[{step_no}/{total}] {title}")  # 打印当前步骤编号与标题
     print(f"命令: {' '.join(cmd)}")  # 打印即将执行的命令
@@ -34,10 +37,11 @@ def main() -> None:  # 命令行入口：组装并顺序执行流水线步骤
     parser.add_argument("--skip-data-prep", action="store_true", help="Skip step 1")  # 跳过步骤 1 数据准备
     parser.add_argument("--skip-train", action="store_true", help="Skip step 2 (SASRecF training)")  # 跳过步骤 2 SASRecF 训练
     parser.add_argument("--skip-recall", action="store_true", help="Skip step 3 (SASRecF recall export)")  # 跳过步骤 3 召回导出
+    parser.add_argument("--skip-candidates", action="store_true", help="Skip four-channel candidate materialization")
     parser.add_argument(  # 定义 --export-rule-recall 参数
         "--export-rule-recall",  # 参数名
         action="store_true",  # 布尔开关
-        help="Run step 4: export Popular / Category Popular / Item2Item CSV (optional debug)",  # 帮助文本
+        help="Deprecated compatibility flag; candidate materialization now runs by default",  # 帮助文本
     )  # --export-rule-recall 参数结束
     parser.add_argument("--skip-weight-search", action="store_true", help="Skip step 5")  # 跳过步骤 5 权重搜索
     parser.add_argument(  # 定义 --skip-valid-eval 参数
@@ -53,59 +57,61 @@ def main() -> None:  # 命令行入口：组装并顺序执行流水线步骤
     parser.add_argument(  # 定义 --weights-json 参数
         "--weights-json",  # 参数名
         type=Path,  # 路径类型
-        default=Path("outputs/evaluation/best_fusion_weights.json"),  # 默认融合权重文件
-        help="Weights file for test offline_eval (default: best_fusion_weights.json)",  # 帮助文本
+        default=None,  # 默认使用当前 run 内搜索结果
+        help="Optional existing weights file; default uses current run ranking artifact",  # 帮助文本
     )  # --weights-json 参数结束
+    parser.add_argument(  # 统一实验协议配置
+        "--experiment-config",  # 参数名
+        type=Path,  # 路径类型
+        default=Path("configs/experiment.yaml"),  # 默认实验 YAML
+        help="Unified experiment protocol YAML (passed to data prep; default: configs/experiment.yaml)",  # 帮助文本
+    )  # --experiment-config 结束
+    parser.add_argument("--run-id", type=str, default=None, help="Reuse a specific run-scoped artifact directory")
+    parser.add_argument("--output-root", type=Path, default=Path("outputs/runs"), help="Run artifact root")
+    parser.add_argument("--no-strict", action="store_true", help="Compatibility mode; formal runs are strict by default")
     args = parser.parse_args()  # 解析命令行参数
 
-    py = sys.executable  # 当前 Python 解释器路径
-    steps: list[tuple[str, list[str]]] = []  # 待执行步骤列表（标题, 命令）
-
-    if not args.skip_data_prep:  # 未跳过数据准备时
-        cmd = [py, "run_data_prep.py"]  # 组装数据准备命令
-        if args.with_filter:  # 若指定 --with-filter
-            cmd.append("--with-filter")  # 追加过滤参数
-        steps.append(("数据准备", cmd))  # 注册步骤 1
-
-    if not args.skip_train:  # 未跳过训练时
-        steps.append(("训练 SASRecF", [py, "run_sasrecf.py", "--skip-preprocess"]))  # 注册步骤 2
-
-    if not args.skip_recall:  # 未跳过召回导出时
-        steps.append(("SASRecF 召回 valid", [py, "run_sasrecf_recall.py", "--eval-split", "valid"]))  # 注册 valid 召回
-        steps.append(("SASRecF 召回 test", [py, "run_sasrecf_recall.py", "--eval-split", "test"]))  # 注册 test 召回
-
-    if args.export_rule_recall:  # 若指定导出规则召回
-        steps.append(("规则三路召回导出", [py, "run_rule_recall.py", "--eval-split", "both"]))  # 注册可选步骤 4
-
-    if not args.skip_weight_search:  # 未跳过权重搜索时
-        steps.append(("融合权重搜索 (valid)", [py, "run_fusion_weight_search.py"]))  # 注册步骤 5
-
-    if not args.skip_valid_eval:  # 未跳过 valid 评估时
-        steps.append(("离线融合评估 valid", [py, "run_offline_eval.py", "--eval-split", "valid"]))  # 注册步骤 6a
-
-    if not args.skip_test_eval:  # 未跳过 test 评估时
-        test_cmd = [py, "run_offline_eval.py", "--eval-split", "test"]  # 组装 test 评估命令
-        if args.weights_json.exists():  # 若权重文件存在
-            test_cmd.extend(["--weights-json", str(args.weights_json)])  # 追加权重文件参数
-        else:  # 权重文件不存在
-            print(  # 打印警告
-                f"\nWarning: {args.weights_json} not found; "  # 提示文件未找到
-                "test eval will use default activity weights."  # 将使用默认活动权重
-            )  # 警告打印结束
-        steps.append(("离线融合评估 test", test_cmd))  # 注册步骤 6b
+    context = create_run_context(  # 一次解析配置并冻结到独立运行目录
+        config_path=args.experiment_config,
+        output_root=args.output_root,
+        run_id=args.run_id,
+        strict=not args.no_strict,
+        initialize=True,
+    )
+    options = PipelineOptions(  # 将 CLI 开关转为纯编排选项
+        with_filter=args.with_filter,
+        skip_data_prep=args.skip_data_prep,
+        skip_train=args.skip_train,
+        skip_recall=args.skip_recall,
+        skip_candidates=args.skip_candidates,
+        skip_weight_search=args.skip_weight_search,
+        skip_valid_eval=args.skip_valid_eval,
+        skip_test_eval=args.skip_test_eval,
+        weights_json=str(args.weights_json) if args.weights_json is not None else None,
+    )
+    steps = build_pipeline_steps(context, python_executable=sys.executable, options=options)
 
     if not steps:  # 若所有步骤均被跳过
         print("No steps to run (all skipped).")  # 提示无步骤可执行
+        context.write_manifest(status="no_steps", completed_steps=[])
         return  # 直接返回
 
     total = len(steps)  # 总步骤数
     pipeline_started = time.perf_counter()  # 记录流水线开始时间
-    print(f"Pipeline: {total} step(s)")  # 打印待执行步骤总数
+    print(f"Pipeline run_id={context.run_id}: {total} step(s)")  # 打印运行 ID 与步骤总数
 
-    for i, (title, cmd) in enumerate(steps, start=1):  # 遍历每个步骤
-        _run_step(i, total, title, cmd)  # 执行当前步骤
+    completed: list[str] = []
+    try:
+        for i, step in enumerate(steps, start=1):  # 遍历每个步骤
+            _run_step(i, total, step.name, step.command)  # 执行当前步骤
+            completed.append(step.name)
+    except BaseException:
+        context.write_manifest(status="failed", completed_steps=completed)
+        raise
 
+    context.write_manifest(status="complete", completed_steps=completed)
     print(f"\nPipeline finished in {time.perf_counter() - pipeline_started:.1f}s")  # 打印流水线总耗时
+    print(f"Run artifacts: {context.artifacts.root}")
 
 
 if __name__ == "__main__":  # 脚本直接运行时

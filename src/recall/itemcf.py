@@ -8,6 +8,8 @@ from pathlib import Path  # 导入路径处理类
 
 import pandas as pd  # 导入 pandas 用于读取交互数据
 
+from src.domain.ids import canonical_item_id, canonical_user_id  # 统一 ID 契约
+
 
 DEFAULT_INTER_PATH = Path("data/processed/hm/hm.train.inter")  # 默认训练集交互文件路径
 
@@ -33,14 +35,17 @@ def build_itemcf_index(  # 构建物品协同过滤相似度索引
                 path,  # 文件路径
                 sep="\t",  # 制表符分隔
                 usecols=["user_id:token", "item_id:token", "timestamp:float"],  # 仅读取必要列
+                dtype={"user_id:token": "string", "item_id:token": "string"},  # 读取时保留 ID 文本
             )  # 结束 read_csv 调用
         )  # 结束 append
     df = pd.concat(frames, ignore_index=True)  # 合并所有交互数据
+    df["user_id:token"] = df["user_id:token"].map(canonical_user_id)  # 用户 ID 统一字符串
+    df["item_id:token"] = df["item_id:token"].map(canonical_item_id)  # 商品 ID 统一十位字符串
     df = df.sort_values(["user_id:token", "timestamp:float"])  # 按用户和时间排序
 
     user_items: list[list[str]] = []  # 初始化用户交互序列列表
     for _, group in df.groupby("user_id:token", sort=False):  # 按用户分组
-        items = group["item_id:token"].astype(str).tolist()  # 提取该用户的商品序列
+        items = group["item_id:token"].tolist()  # 提取已规范化的商品序列
         if len(items) > max_user_items:  # 若序列过长
             items = items[-max_user_items:]  # 仅保留最近 max_user_items 个商品
 
@@ -87,7 +92,7 @@ def recall_itemcf(  # 基于 ItemCF 索引召回商品
     top_k: int = 100,  # 召回数量上限
 ) -> list[tuple[str, float]]:  # 返回商品 ID 与聚合分数列表
     """Recall top-k items by aggregating similar neighbors of history items."""  # 聚合历史商品相似邻居进行召回
-    history_list = [str(x) for x in user_history]  # 规范化历史商品为字符串列表
+    history_list = [canonical_item_id(x) for x in user_history]  # 规范化历史商品列表
     scores: defaultdict[str, float] = defaultdict(float)  # 初始化候选商品聚合得分
 
     for item in history_list:  # 遍历用户历史中的每个商品

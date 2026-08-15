@@ -6,7 +6,6 @@ import argparse  # 导入命令行参数解析模块
 import copy  # 深拷贝权重模板
 import csv  # 导入 CSV 读写模块
 import json  # 导入 JSON 序列化模块
-import math  # 导入数学函数库
 import sys  # 导入系统模块用于路径注入
 from collections import defaultdict  # 导入带默认值的字典
 from dataclasses import dataclass  # 融合评估上下文
@@ -19,6 +18,15 @@ if __package__ is None or __package__ == "":  # 若以脚本方式直接运行
     if str(project_root) not in sys.path:  # 若根目录不在搜索路径中
         sys.path.insert(0, str(project_root))  # 注入项目根目录到 sys.path
 
+from src.data.split import (  # 时间切分与防泄漏路径约定
+    TEST_INTER_FILE,  # 测试交互路径
+    TRAIN_INTER_FILE,  # 训练交互路径
+    VALID_INTER_FILE,  # 验证交互路径
+    assert_history_paths_allowed,  # 检查召回索引未混入标签周
+    history_paths_for_eval,  # 按评估划分选择历史路径
+)  # 切分模块导入结束
+from src.evaluate.metrics import hit_at_k, map_at_k, ndcg_at_k, recall_at_k  # 统一指标实现
+from src.domain.ids import canonical_item_id, canonical_user_id  # 统一 ID 契约
 from src.fusion.weighted_fusion import (  # 导入融合相关函数
     ACTIVITY_WEIGHTS,  # 默认活跃度权重模板
     ActivityTier,  # 活跃度分层类型
@@ -44,11 +52,14 @@ from src.recall.item2item import (  # item2item 共现召回
     recall_item2item,  # 执行 item2item 召回
 )  # item2item 模块导入结束
 from src.recall.popular import POPULAR_RECALL_TOP_K, build_popular_index, recall_popular  # 导入热门召回函数
+from src.recall.generator import generate_candidates, read_candidate_csv  # 与规则导出共享候选生成器
+from src.recall.registry import PrecomputedChannel, build_rule_channel_registry  # 规则注册表与序列适配器
+from src.ranking.weighted_rrf import WeightedRRFRanker  # 排序层基线实现
 
 
-TRAIN_INTER = Path("data/processed/hm/hm.train.inter")  # 训练集交互文件路径
-VALID_INTER = Path("data/processed/hm/hm.valid.inter")  # 验证集交互文件路径
-TEST_INTER = Path("data/processed/hm/hm.test.inter")  # 测试集交互文件路径
+TRAIN_INTER = TRAIN_INTER_FILE  # 训练集交互文件路径
+VALID_INTER = VALID_INTER_FILE  # 验证集交互文件路径
+TEST_INTER = TEST_INTER_FILE  # 测试集交互文件路径
 
 SASREC_RECALL_DIR = Path("outputs/recommendations")  # SASRec 召回结果目录
 FUSION_OUT_DIR = Path("outputs/recommendations")  # 融合推荐输出目录
@@ -64,55 +75,36 @@ def default_sasrec_recall_csv(eval_split: str, prefer_sasrecf: bool = True) -> P
 
 
 def _load_targets(path: Path) -> dict[str, set[str]]:  # 加载评估集真实标签
-    df = pd.read_csv(path, sep="\t", usecols=["user_id:token", "item_id:token"])  # 读取用户与物品列
+    df = pd.read_csv(  # 读取用户与物品列并保留 ID 文本
+        path,
+        sep="\t",
+        usecols=["user_id:token", "item_id:token"],
+        dtype={"user_id:token": "string", "item_id:token": "string"},
+    )
+    df["user_id:token"] = df["user_id:token"].map(canonical_user_id)  # 统一用户 ID
+    df["item_id:token"] = df["item_id:token"].map(canonical_item_id)  # 统一商品 ID
     grouped = (  # 按用户聚合真实物品集合
         df.groupby("user_id:token")["item_id:token"]  # 按用户分组并取物品列
-        .apply(lambda s: {str(x) for x in s.tolist()})  # 将每组物品转为字符串集合
+        .apply(lambda s: {canonical_item_id(x) for x in s.tolist()})  # 将每组物品转为规范化集合
         .to_dict()  # 转为字典
     )  # 结束标签聚合
     return grouped  # 返回用户到真实物品集合的映射
 
 
-def _recall_at_k(actual: set[str], pred: list[str], k: int) -> float:  # 计算单用户 Recall@K
-    if not actual:  # 若无真实标签
-        return 0.0  # 返回 0
-    return len(set(pred[:k]) & actual) / len(actual)  # 命中数除以真实物品总数
+def _recall_at_k(actual: set[str], pred: list[str], k: int) -> float:  # 兼容旧内部名称
+    return recall_at_k(actual, pred, k)  # 转调统一实现
 
 
-def _hit_at_k(actual: set[str], pred: list[str], k: int) -> float:  # 计算单用户 Hit@K
-    return 1.0 if set(pred[:k]) & actual else 0.0  # 有命中返回 1.0，否则返回 0.0
+def _hit_at_k(actual: set[str], pred: list[str], k: int) -> float:  # 兼容旧内部名称
+    return hit_at_k(actual, pred, k)  # 转调统一实现
 
 
-def _ndcg_at_k(actual: set[str], pred: list[str], k: int) -> float:  # 计算单用户 NDCG@K
-    dcg = 0.0  # 初始化折损累积增益
-    for i, item in enumerate(pred[:k]):  # 遍历前 K 个预测物品
-        if item in actual:  # 若该物品在真实标签中
-            dcg += 1.0 / (math.log2(i + 2))  # 累加位置折损增益
-    ideal_hits = min(len(actual), k)  # 理想命中数取真实数与 K 的较小值
-    if ideal_hits == 0:  # 若无理想命中
-        return 0.0  # 返回 0
-    idcg = sum(1.0 / (math.log2(i + 2)) for i in range(ideal_hits))  # 计算理想折损累积增益
-    return dcg / idcg if idcg > 0 else 0.0  # 返回 NDCG 比值
+def _ndcg_at_k(actual: set[str], pred: list[str], k: int) -> float:  # 兼容旧内部名称
+    return ndcg_at_k(actual, pred, k)  # 转调统一实现
 
 
-def _map_at_k(actual: set[str], pred: list[str], k: int) -> float:  # 计算单用户 MAP@K
-    """Mean Average Precision at K: AP@K = sum(P@i * rel_i) / min(|actual|, K)."""  # MAP@K 为前 K 位平均精确率均值
-    if not actual:  # 若无真实标签
-        return 0.0  # 返回 0
-
-    hits = 0  # 初始化累计命中数
-    ap_sum = 0.0  # 初始化精确率累加和
-    for i, item in enumerate(pred[:k], start=1):  # 遍历前 K 个预测，排名从 1 开始
-        if item in actual:  # 若当前物品命中
-            hits += 1  # 命中数加一
-            ap_sum += hits / i  # 累加当前位置的精确率
-
-    denom = min(len(actual), k)  # 分母取真实数与 K 的较小值
-    return ap_sum / denom if denom > 0 else 0.0  # 返回平均精确率
-
-
-def map_at_k(actual: set[str], pred: list[str], k: int) -> float:  # 公开 MAP@K（与 offline_eval 一致）
-    return _map_at_k(actual, pred, k)  # 复用内部实现
+def _map_at_k(actual: set[str], pred: list[str], k: int) -> float:  # 兼容旧内部名称
+    return map_at_k(actual, pred, k)  # 转调统一实现
 
 
 @dataclass  # 数据类装饰器
@@ -136,6 +128,8 @@ def build_fusion_eval_context(  # 构建融合评估上下文（召回只算一�
     final_top_k: int = 12,  # 融合后最终 Top-K
     sasrec_recall_csv: str | Path | None = None,  # 可选序列模型召回 CSV 路径
     sequence_channel: str | None = None,  # 序列通道名（sasrec / sasrecf），默认从 CSV 推断
+    strict: bool = False,  # 正式运行可要求缺失依赖立即失败
+    candidate_csv: str | Path | None = None,  # 可直接消费已物化四路候选
 ) -> FusionEvalContext:  # 返回融合评估上下文
     if eval_split not in {"valid", "test"}:  # 校验评估划分参数
         raise ValueError("eval_split must be 'valid' or 'test'")  # 非法划分时抛出异常
@@ -146,42 +140,62 @@ def build_fusion_eval_context(  # 构建融合评估上下文（召回只算一�
         else default_sasrec_recall_csv(eval_split)  # 否则使用默认路径
     )  # 结束路径选择
     eval_path = VALID_INTER if eval_split == "valid" else TEST_INTER  # 选择验证或测试交互文件
-    history_paths = [TRAIN_INTER] if eval_split == "valid" else [TRAIN_INTER, VALID_INTER]  # 选择构建历史所用的交互文件
+    history_paths = history_paths_for_eval(eval_split, TRAIN_INTER, VALID_INTER)  # 只使用预测时刻之前的交互
+    assert_history_paths_allowed(eval_split, history_paths, TRAIN_INTER, VALID_INTER, TEST_INTER)  # 防止标签周泄漏进召回索引
 
     user_history_map = build_user_history(*history_paths)  # 构建用户历史映射
     targets = _load_targets(eval_path)  # 加载评估集真实标签
-    popular_index = build_popular_index(*history_paths)  # 构建热门召回索引
-    category_popular_index = build_category_popular_index(history_paths)  # 构建类别热门索引
-    item2item_index = build_item2item_index(  # 构建 item2item 共现索引
-        history_paths,  # 传入历史交互文件路径
-        cooccur_weeks=item2item_cooccur_weeks,  # 共现统计窗口
-        top_sim_k=item2item_top_sim_k,  # 相似邻居保留数
-    )  # item2item 索引构建完成
-    sasrec_map = load_channel_recall_csv(sasrec_recall_csv)  # 加载序列模型召回结果
-    resolved_sequence_channel = sequence_channel or infer_sequence_channel(sasrec_recall_csv)  # 推断通道名
+    if candidate_csv is not None:  # 正式流程优先消费已物化候选
+        candidate_path = Path(candidate_csv)
+        if strict and not candidate_path.exists():
+            raise FileNotFoundError(f"Missing required candidate artifact: {candidate_path}")
+        generated = read_candidate_csv(candidate_path) if candidate_path.exists() else []
+        bad_splits = sorted({candidate.split for candidate in generated if candidate.split != eval_split})
+        if bad_splits:
+            raise ValueError(f"Candidate artifact split mismatch: expected={eval_split}, found={bad_splits}")
+        sequence_names = sorted({candidate.channel for candidate in generated if candidate.channel.startswith("sasrec")})
+        resolved_sequence_channel = sequence_channel or (sequence_names[0] if sequence_names else "sasrecf")
+        if strict and not generated:
+            raise ValueError(f"Candidate artifact is empty: {candidate_path}")
+        if strict and not sequence_names:
+            raise ValueError(f"Candidate artifact has no SASRec/SASRecF channel: {candidate_path}")
+    else:  # 兼容旧命令：现场生成相同 Candidate schema
+        if strict and not sasrec_recall_csv.exists():
+            raise FileNotFoundError(f"Missing required sequence recall: {sasrec_recall_csv}")
+        sasrec_map = load_channel_recall_csv(sasrec_recall_csv)
+        resolved_sequence_channel = sequence_channel or infer_sequence_channel(sasrec_recall_csv)
+        registry = build_rule_channel_registry(
+            history_paths,
+            item2item_cooccur_weeks=item2item_cooccur_weeks,
+            item2item_top_sim_k=item2item_top_sim_k,
+            item2item_seed_items=item2item_seed_items,
+            category_seed_items=category_popular_seed_items,
+        )
+        registry[resolved_sequence_channel] = PrecomputedChannel(
+            resolved_sequence_channel,
+            {user: [(item, score) for item, score, _ in rows] for user, rows in sasrec_map.items()},
+        )
+        generated = generate_candidates(
+            eval_users=targets,
+            user_history=user_history_map,
+            channels=registry,
+            split=eval_split,
+            top_k_by_channel={
+                "popular": popular_recall_top_k,
+                "category_popular": category_popular_recall_top_k,
+                "item2item": item2item_recall_top_k,
+                resolved_sequence_channel: recall_top_k,
+            },
+        )
+    candidates_by_user: dict[str, dict[str, list[tuple[str, float]]]] = defaultdict(lambda: defaultdict(list))
+    for candidate in generated:  # Candidate schema 转为兼容的融合输入
+        candidates_by_user[candidate.user_id][candidate.channel].append((candidate.item_id, candidate.score))
 
     users: list[dict] = []  # 初始化用户评估数据列表
     for user_id, actual_items in targets.items():  # 遍历每个评估用户
         history = user_history_map.get(user_id, [])  # 获取用户历史序列
         history_set = set(history)  # 转为集合
-        channel_candidates = {  # 组装各通道候选
-            "popular": recall_popular(popular_index, user_history=history_set, top_k=popular_recall_top_k),  # 热门通道召回
-            "category_popular": recall_category_popular(  # 类别热门通道召回
-                history,  # 用户历史序列
-                category_popular_index,  # 类别热门索引
-                seed_items=category_popular_seed_items,  # 种子商品数
-                top_k=category_popular_recall_top_k,  # 召回 Top-K
-            ),  # 类别热门召回完成
-            "item2item": recall_item2item(  # item2item 共现召回
-                history,  # 用户历史序列
-                item2item_index,  # item2item 共现索引
-                seed_items=item2item_seed_items,  # 种子商品数
-                top_k=item2item_recall_top_k,  # 召回 Top-K
-            ),  # item2item 召回完成
-            resolved_sequence_channel: [  # 序列模型通道召回
-                (iid, score) for iid, score, _ in sasrec_map.get(user_id, [])[:recall_top_k]  # 截取 Top-K 候选
-            ],  # 序列模型通道召回结束
-        }  # 通道候选字典结束
+        channel_candidates = dict(candidates_by_user.get(user_id, {}))  # 使用统一生成的候选
         users.append(  # 追加用户评估数据
             {  # 用户数据字典
                 "user_id": user_id,  # 用户 ID
@@ -212,15 +226,13 @@ def evaluate_fusion_map_at_k(  # 给定权重模板计算平均 MAP@K
             context.sequence_channel,  # 序列模型通道名
             activity_weights=activity_weights,  # 传入分层权重模板
         )  # 权重获取完成
-        fused = fuse_candidates(  # 融合多通道候选
+        ranked = WeightedRRFRanker(user_weights, exclude_seen=exclude_seen).rank(  # 通过排序接口执行 RRF
             user_id=row["user_id"],  # 用户 ID
             user_history=row["history_set"],  # 用户历史集合
             channel_candidates=row["channel_candidates"],  # 各通道候选
-            channel_weights=user_weights,  # 通道权重
             top_k=context.final_top_k,  # 最终 Top-K
-            exclude_seen=exclude_seen,  # 是否排除已购
-        )  # 融合完成
-        pred_items = [item_id for item_id, _ in fused]  # 提取预测物品 ID 列表
+        )  # 排序完成
+        pred_items = [item.item_id for item in ranked]  # 提取预测物品 ID 列表
         maps.append(_map_at_k(row["actual_items"], pred_items, context.final_top_k))  # 累计 MAP@K
     return float(sum(maps) / len(maps)) if maps else 0.0  # 返回平均 MAP@K
 
@@ -245,37 +257,33 @@ def evaluate_fusion(  # 执行多通道融合并评估
     activity_weights: dict[ActivityTier, dict[str, float]] | None = None,  # 自定义分层权重
     exclude_seen: bool = False,  # 融合时是否排除历史已购
     sequence_channel: str | None = None,  # 序列通道名（sasrec / sasrecf），默认从 CSV 推断
+    output_dir: str | Path = FUSION_OUT_DIR,  # 推荐输出目录，支持 run-scoped 路径
+    evaluation_dir: str | Path = EVAL_OUT_DIR,  # 指标输出目录，支持 run-scoped 路径
+    strict: bool = False,  # 严格模式禁止缺失序列召回
+    candidate_csv: str | Path | None = None,  # 已物化候选输入
 ) -> tuple[Path, Path, dict[str, float]]:  # 返回推荐文件路径、指标文件路径与指标字典
     """Run multi-channel recall fusion and evaluate on valid/test split."""  # 在 valid/test 划分上运行多通道召回融合并评估
     if eval_split not in {"valid", "test"}:  # 校验评估划分参数
         raise ValueError("eval_split must be 'valid' or 'test'")  # 非法划分时抛出异常
 
-    sasrec_recall_csv = (  # 确定 SASRec 召回文件路径
-        Path(sasrec_recall_csv)  # 若用户提供路径则转为 Path
-        if sasrec_recall_csv is not None  # 判断路径是否非空
-        else default_sasrec_recall_csv(eval_split)  # 否则使用默认路径
-    )  # 结束路径选择
-
-    eval_path = VALID_INTER if eval_split == "valid" else TEST_INTER  # 选择验证或测试交互文件
-    history_paths = [TRAIN_INTER] if eval_split == "valid" else [TRAIN_INTER, VALID_INTER]  # 选择构建历史所用的交互文件
-
-    user_history_map = build_user_history(*history_paths)  # 构建用户历史映射
-    targets = _load_targets(eval_path)  # 加载评估集真实标签
-
-    popular_index = build_popular_index(*history_paths)  # 构建热门召回索引
-    category_popular_index = build_category_popular_index(history_paths)  # 构建类别热门索引
-    item2item_index = build_item2item_index(  # 构建 item2item 共现索引
-        history_paths,  # 传入历史交互文件路径
-        cooccur_weeks=item2item_cooccur_weeks,  # 共现统计窗口
-        top_sim_k=item2item_top_sim_k,  # 相似邻居保留数
-    )  # item2item 索引构建完成
-    if not sasrec_recall_csv.exists():  # 若 SASRec 召回文件不存在
-        print(  # 打印警告信息
-            f"Warning: SASRec recall file not found: {sasrec_recall_csv}. "  # 提示缺失文件路径
-            "Fusion will run without SASRec channel."  # 说明将跳过 SASRec 通道
-        )  # 结束警告输出
-    sasrec_map = load_channel_recall_csv(sasrec_recall_csv)  # 加载序列模型召回结果
-    resolved_sequence_channel = sequence_channel or infer_sequence_channel(sasrec_recall_csv)  # 推断通道名
+    context = build_fusion_eval_context(  # 召回、候选与权重搜索共用同一上下文构建
+        eval_split=eval_split,
+        recall_top_k=recall_top_k,
+        popular_recall_top_k=popular_recall_top_k,
+        category_popular_recall_top_k=category_popular_recall_top_k,
+        item2item_recall_top_k=item2item_recall_top_k,
+        item2item_cooccur_weeks=item2item_cooccur_weeks,
+        item2item_top_sim_k=item2item_top_sim_k,
+        item2item_seed_items=item2item_seed_items,
+        category_popular_seed_items=category_popular_seed_items,
+        final_top_k=final_top_k,
+        sasrec_recall_csv=sasrec_recall_csv,
+        sequence_channel=sequence_channel,
+        strict=strict,
+        candidate_csv=candidate_csv,
+    )
+    targets = context.targets
+    resolved_sequence_channel = context.sequence_channel
     weights_table = activity_weights or ACTIVITY_WEIGHTS  # 使用的分层权重表
 
     fixed_weights = {  # 固定权重（adaptive_weights=False 时使用）
@@ -287,34 +295,21 @@ def evaluate_fusion(  # 执行多通道融合并评估
 
     tier_counts: dict[str, int] = defaultdict(int)  # 各活跃度分层用户数
 
-    FUSION_OUT_DIR.mkdir(parents=True, exist_ok=True)  # 创建融合输出目录
-    EVAL_OUT_DIR.mkdir(parents=True, exist_ok=True)  # 创建评估输出目录
-    rec_out = FUSION_OUT_DIR / f"fusion_{eval_split}.csv"  # 融合推荐结果输出路径
-    metric_out = EVAL_OUT_DIR / f"fusion_{eval_split}_metrics.json"  # 评估指标输出路径
+    resolved_output_dir = Path(output_dir)  # 解析推荐输出目录
+    resolved_evaluation_dir = Path(evaluation_dir)  # 解析评估输出目录
+    resolved_output_dir.mkdir(parents=True, exist_ok=True)  # 创建融合输出目录
+    resolved_evaluation_dir.mkdir(parents=True, exist_ok=True)  # 创建评估输出目录
+    rec_out = resolved_output_dir / f"fusion_{eval_split}.csv"  # 融合推荐结果输出路径
+    metric_out = resolved_evaluation_dir / f"fusion_{eval_split}_metrics.json"  # 评估指标输出路径
 
     maps, recalls, ndcgs, hits = [], [], [], []  # 初始化各指标累计列表
     rows = []  # 初始化推荐结果行列表
 
-    for user_id, actual_items in targets.items():  # 遍历每个评估用户
-        history = user_history_map.get(user_id, [])  # 获取用户历史序列
-        history_set = set(history)  # 转为集合（活跃度权重与 API 兼容，不再用于排除已购）
-
-        pop_cands = recall_popular(popular_index, user_history=history_set, top_k=popular_recall_top_k)  # 热门通道召回
-        category_pop_cands = recall_category_popular(  # 类别热门通道召回
-            history,  # 用户历史序列
-            category_popular_index,  # 类别热门索引
-            seed_items=category_popular_seed_items,  # 种子商品数
-            top_k=category_popular_recall_top_k,  # 召回 Top-K
-        )  # 类别热门召回完成
-        item2item_cands = recall_item2item(  # item2item 共现召回
-            history,  # 用户历史序列
-            item2item_index,  # item2item 共现索引
-            seed_items=item2item_seed_items,  # 种子商品数
-            top_k=item2item_recall_top_k,  # 召回 Top-K
-        )  # item2item 召回完成
-        sasrec_cands = [  # 序列模型通道召回
-            (iid, score) for iid, score, _ in sasrec_map.get(user_id, [])[:recall_top_k]  # 截取 Top-K 候选
-        ]  # 序列模型通道召回
+    for row in context.users:  # 遍历统一候选上下文
+        user_id = row["user_id"]
+        actual_items = row["actual_items"]
+        history = row["history"]
+        history_set = row["history_set"]
 
         if adaptive_weights:  # 按历史长度自适应权重
             tier = classify_activity_tier(len(history))  # 判定活跃度
@@ -327,33 +322,26 @@ def evaluate_fusion(  # 执行多通道融合并评估
         else:  # 全用户统一权重
             user_weights = fixed_weights  # 使用固定权重
 
-        fused = fuse_candidates(  # 融合四通道候选
+        ranked = WeightedRRFRanker(user_weights, exclude_seen=exclude_seen).rank(  # 融合基线排序器
             user_id=user_id,  # 传入用户 ID
             user_history=history_set,  # 传入用户历史
-            channel_candidates={  # 组装各通道候选
-                "popular": pop_cands,  # 热门通道候选
-                "category_popular": category_pop_cands,  # 类别热门通道候选
-                "item2item": item2item_cands,  # item2item 共现候选
-                resolved_sequence_channel: sasrec_cands,  # 序列模型通道候选
-            },  # 结束通道候选字典
-            channel_weights=user_weights,  # 传入通道权重
+            channel_candidates=row["channel_candidates"],  # 使用统一 Candidate 生成结果
             top_k=final_top_k,  # 指定最终 Top-K
-            exclude_seen=exclude_seen,  # 是否排除已购
-        )  # 结束融合调用
+        )  # 结束排序调用
 
-        pred_items = [item_id for item_id, _ in fused]  # 提取预测物品 ID 列表
+        pred_items = [item.item_id for item in ranked]  # 提取预测物品 ID 列表
         maps.append(_map_at_k(actual_items, pred_items, final_top_k))  # 累计 MAP@K
         recalls.append(_recall_at_k(actual_items, pred_items, final_top_k))  # 累计 Recall@K
         ndcgs.append(_ndcg_at_k(actual_items, pred_items, final_top_k))  # 累计 NDCG@K
         hits.append(_hit_at_k(actual_items, pred_items, final_top_k))  # 累计 Hit@K
 
-        for rank, (item_id, score) in enumerate(fused, start=1):  # 遍历融合结果并记录排名
+        for item in ranked:  # 遍历排序结果并记录排名
             rows.append(  # 追加一行推荐记录
                 {  # 构建推荐行字典
                     "user_id": user_id,  # 用户 ID
-                    "item_id": item_id,  # 物品 ID
-                    "score": score,  # 融合得分
-                    "rank": rank,  # 推荐排名
+                    "item_id": item.item_id,  # 物品 ID
+                    "score": item.score,  # 融合得分
+                    "rank": item.rank,  # 推荐排名
                     "split": eval_split,  # 评估划分
                     "channel": "fusion",  # 渠道标识为融合
                 }  # 结束行字典
@@ -431,6 +419,10 @@ def main() -> None:  # 命令行入口函数
     parser.add_argument("--item2item-seed-items", type=int, default=SEED_ITEMS)  # item2item 种子商品数参数
     parser.add_argument("--category-popular-seed-items", type=int, default=CATEGORY_SEED_ITEMS)  # 类别热门种子商品数参数
     parser.add_argument("--sasrec-recall-csv", type=Path, default=None)  # 可选序列模型召回 CSV
+    parser.add_argument("--candidate-csv", type=Path, default=None)  # 已物化四路候选 CSV
+    parser.add_argument("--output-dir", type=Path, default=FUSION_OUT_DIR)  # 推荐输出目录
+    parser.add_argument("--evaluation-dir", type=Path, default=EVAL_OUT_DIR)  # 指标输出目录
+    parser.add_argument("--strict", action="store_true")  # 缺失依赖直接失败
     parser.add_argument(  # 序列通道名参数
         "--sequence-channel",  # 参数名
         type=str,  # 字符串类型
@@ -485,6 +477,10 @@ def main() -> None:  # 命令行入口函数
         activity_weights=loaded_weights,  # 可选：搜索得到的分层权重
         exclude_seen=exclude_seen,  # 是否排除已购
         sequence_channel=args.sequence_channel,  # 传入序列通道名
+        candidate_csv=args.candidate_csv,  # 已物化候选
+        output_dir=args.output_dir,  # 推荐输出目录
+        evaluation_dir=args.evaluation_dir,  # 指标输出目录
+        strict=args.strict,  # 严格依赖检查
     )  # 结束评估调用
 
 

@@ -17,6 +17,10 @@ if __package__ is None or __package__ == "":  # 若以脚本方式直接运行
         sys.path.insert(0, str(project_root))  # 注入项目根目录到 sys.path
 
 from src.fusion.weighted_fusion import build_user_history  # 导入用户历史构建函数
+from src.candidates.union import union_candidates  # 构建统一候选并集
+from src.recall.generator import generate_candidates, write_candidate_csv  # 统一候选生成与落盘
+from src.recall.registry import PrecomputedChannel, build_rule_channel_registry, select_channels  # 召回注册表
+from src.fusion.weighted_fusion import infer_sequence_channel, load_channel_recall_csv  # 接入序列召回文件
 from src.recall.category_popular import (  # 导入类别热门召回相关符号
     CATEGORY_POPULAR_RECALL_TOP_K,  # 类别热门召回 Top-K 默认值
     SEED_ITEMS as CATEGORY_SEED_ITEMS,  # 类别热门种子商品数
@@ -180,20 +184,68 @@ def export_rule_recalls(  # 批量导出所选规则召回通道
     eval_split: str = "valid",  # 评估划分：valid 或 test
     channels: tuple[ChannelName, ...] = ALL_CHANNELS,  # 要导出的通道列表
     top_k: int | None = None,  # 可选统一 Top-K 覆盖
+    output_dir: Path = OUTPUT_DIR,  # 支持 run-scoped 产物目录
+    union_top_k: int = 300,  # 每用户候选并集上限
+    candidate_output_dir: Path | None = None,  # 候选并集可独立落入 run/candidates
+    sequence_recall_csv: Path | None = None,  # 可选序列召回，加入四路候选并集
+    sequence_top_k: int = 100,  # 序列通道候选上限
+    channel_top_k: dict[str, int] | None = None,  # 可按通道覆盖 Top-K
 ) -> dict[str, Path]:  # 返回通道名到输出路径的映射
     """Export selected rule-based recall channels for one eval split."""  # 导出指定评估划分的所选规则召回通道
     if eval_split not in {"valid", "test"}:  # 校验评估划分名称
         raise ValueError("eval_split must be 'valid' or 'test'")  # 非法划分则报错
 
-    outputs: dict[str, Path] = {}  # 初始化输出路径字典
-    for channel in channels:  # 遍历每个通道
-        if channel not in _EXPORTERS:  # 若通道名未知
-            raise ValueError(f"Unknown channel: {channel}")  # 抛出异常
-        kwargs: dict = {"eval_split": eval_split}  # 构建导出参数字典
-        if top_k is not None:  # 若指定了 Top-K 覆盖
-            kwargs["top_k"] = top_k  # 写入 Top-K 参数
-        outputs[channel] = _EXPORTERS[channel](**kwargs)  # 调用对应导出函数
-    return outputs  # 返回各通道输出路径
+    history_paths = _history_paths(eval_split)  # 当前预测时刻可用历史
+    user_history = build_user_history(*history_paths)  # 历史只构建一次
+    registry = select_channels(build_rule_channel_registry(history_paths), list(channels))  # 索引只构建一次
+    default_top_k = {  # 每通道默认召回数
+        "popular": POPULAR_RECALL_TOP_K,
+        "category_popular": CATEGORY_POPULAR_RECALL_TOP_K,
+        "item2item": ITEM2ITEM_RECALL_TOP_K,
+    }
+    top_k_by_channel = {  # 统一覆盖优先，其次通道配置，最后模块默认
+        channel: int(
+            top_k
+            if top_k is not None
+            else (channel_top_k or {}).get(channel, default_top_k[channel])
+        )
+        for channel in channels
+    }
+    if sequence_recall_csv is not None:  # 将已落盘序列通道接入同一候选生成器
+        if not sequence_recall_csv.exists():
+            raise FileNotFoundError(f"Missing sequence recall file: {sequence_recall_csv}")
+        sequence_map = load_channel_recall_csv(sequence_recall_csv)
+        sequence_name = infer_sequence_channel(sequence_recall_csv)
+        registry[sequence_name] = PrecomputedChannel(
+            sequence_name,
+            {user: [(item, score) for item, score, _ in rows] for user, rows in sequence_map.items()},
+        )
+        top_k_by_channel[sequence_name] = sequence_top_k
+    candidates = generate_candidates(  # 通过统一接口生成稳定 Candidate schema
+        eval_users=_load_eval_users(eval_split),
+        user_history=user_history,
+        channels=registry,
+        split=eval_split,
+        top_k_by_channel=top_k_by_channel,
+    )
+
+    outputs: dict[str, Path] = {}
+    for channel in channels:  # 仍保留每通道文件，兼容旧加载逻辑
+        path = output_dir / f"{channel}_{eval_split}.csv"
+        outputs[channel] = write_candidate_csv(
+            (candidate for candidate in candidates if candidate.channel == channel),
+            path,
+        )
+        print(f"Saved {channel} recall ({eval_split}): {path}")
+
+    resolved_candidate_dir = candidate_output_dir or output_dir
+    union_path = resolved_candidate_dir / f"{eval_split}.csv"  # 一份可供排序层直接消费的并集
+    outputs["candidate_union"] = write_candidate_csv(
+        union_candidates(candidates, top_k_items_per_user=union_top_k),
+        union_path,
+    )
+    print(f"Saved candidate union ({eval_split}): {union_path}")
+    return outputs
 
 
 def main() -> None:  # 命令行入口函数
@@ -218,6 +270,14 @@ def main() -> None:  # 命令行入口函数
         default=None,  # 默认使用各通道常量
         help="Override recall top-k for all channels (default: each channel's constant, usually 50)",  # 帮助文本
     )  # Top-K 参数定义结束
+    parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)  # 每通道召回输出目录
+    parser.add_argument("--candidate-output-dir", type=Path, default=None)  # 候选并集输出目录
+    parser.add_argument("--sequence-recall-csv", type=Path, default=None)  # 单 split 时可合入序列召回
+    parser.add_argument("--sequence-top-k", type=int, default=100)  # 序列通道 Top-K
+    parser.add_argument("--union-top-k", type=int, default=300)  # 每用户并集商品上限
+    parser.add_argument("--popular-top-k", type=int, default=POPULAR_RECALL_TOP_K)
+    parser.add_argument("--category-popular-top-k", type=int, default=CATEGORY_POPULAR_RECALL_TOP_K)
+    parser.add_argument("--item2item-top-k", type=int, default=ITEM2ITEM_RECALL_TOP_K)
     args = parser.parse_args()  # 解析命令行参数
 
     if args.channels.strip().lower() == "all":  # 若选择全部通道
@@ -235,7 +295,21 @@ def main() -> None:  # 命令行入口函数
         print(f"\n{'=' * 60}")  # 打印分隔线
         print(f"Eval split: {split}")  # 打印当前划分
         print("=" * 60)  # 打印分隔线
-        export_rule_recalls(eval_split=split, channels=channels, top_k=args.top_k)  # 导出所选通道
+        export_rule_recalls(  # 导出并物化候选
+            eval_split=split,
+            channels=channels,
+            top_k=args.top_k,
+            output_dir=args.output_dir,
+            candidate_output_dir=args.candidate_output_dir,
+            sequence_recall_csv=args.sequence_recall_csv,
+            sequence_top_k=args.sequence_top_k,
+            union_top_k=args.union_top_k,
+            channel_top_k={
+                "popular": args.popular_top_k,
+                "category_popular": args.category_popular_top_k,
+                "item2item": args.item2item_top_k,
+            },
+        )
 
     elapsed = time.perf_counter() - started  # 计算总耗时
     print(f"\nAll rule-based recalls finished in {elapsed:.1f}s")  # 打印总耗时

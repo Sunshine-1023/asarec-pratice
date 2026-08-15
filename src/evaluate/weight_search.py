@@ -214,6 +214,9 @@ def run_weight_search(  # 运行完整权重搜索流程并保存结果
     sasrec_recall_csv: str | Path | None = None,  # 可选序列模型召回 CSV
     compare_exclude_seen: bool = True,  # 是否对比 exclude_seen 两种模式
     verbose: bool = True,  # 是否打印详细日志
+    candidate_csv: str | Path | None = None,  # 已物化 valid 候选
+    strict: bool = False,  # 正式运行缺依赖即失败
+    final_top_k: int = 12,  # 与实验配置一致的最终排序长度
 ) -> dict[str, Any]:  # 返回搜索结果载荷
     if eval_split != "valid":  # 权重搜索仅允许验证集
         raise ValueError("Weight search is only allowed on eval_split='valid'")  # 抛出非法划分异常
@@ -223,6 +226,9 @@ def run_weight_search(  # 运行完整权重搜索流程并保存结果
     context = build_fusion_eval_context(  # 构建融合评估上下文（召回只算一次）
         eval_split="valid",  # 固定使用验证集
         sasrec_recall_csv=sasrec_recall_csv,  # 传入序列模型召回 CSV
+        candidate_csv=candidate_csv,  # 优先消费固定候选
+        strict=strict,  # 严格依赖检查
+        final_top_k=final_top_k,  # 排序长度
     )  # 上下文构建完成
 
     modes = [False, True] if compare_exclude_seen else [False]  # 确定要搜索的 exclude_seen 模式列表
@@ -288,6 +294,9 @@ def main() -> None:  # 命令行入口函数
     parser.add_argument("--max-passes", type=int, default=2, help="Coordinate descent passes")  # 坐标下降轮数参数
     parser.add_argument("--output-json", type=Path, default=DEFAULT_OUTPUT_JSON)  # 输出 JSON 路径参数
     parser.add_argument("--sasrec-recall-csv", type=Path, default=None)  # 可选序列模型召回 CSV 参数
+    parser.add_argument("--candidate-csv", type=Path, default=None)  # 已物化 valid 候选
+    parser.add_argument("--strict", action="store_true")  # 缺失候选或序列召回直接失败
+    parser.add_argument("--final-top-k", type=int, default=12)  # 最终排序长度
     parser.add_argument(  # exclude_seen 搜索模式参数
         "--exclude-seen-only",  # 参数名
         choices=["both", "false", "true"],  # 可选值
@@ -305,7 +314,13 @@ def main() -> None:  # 命令行入口函数
         pass  # 下方单独处理 true 模式
 
     if args.exclude_seen_only == "true":  # 仅搜索 exclude_seen=true 模式
-        context = build_fusion_eval_context(eval_split="valid", sasrec_recall_csv=args.sasrec_recall_csv)  # 构建评估上下文
+        context = build_fusion_eval_context(  # 构建评估上下文
+            eval_split="valid",
+            sasrec_recall_csv=args.sasrec_recall_csv,
+            candidate_csv=args.candidate_csv,
+            strict=args.strict,
+            final_top_k=args.final_top_k,
+        )
         best_weights, best_map = search_best_weights(  # 执行权重搜索
             context, step=args.step, exclude_seen=True, max_passes=args.max_passes  # 固定排除已购
         )  # 搜索完成
@@ -327,7 +342,13 @@ def main() -> None:  # 命令行入口函数
         return  # 结束主函数
 
     if args.exclude_seen_only == "false":  # 仅搜索 exclude_seen=false 模式
-        context = build_fusion_eval_context(eval_split="valid", sasrec_recall_csv=args.sasrec_recall_csv)  # 构建评估上下文
+        context = build_fusion_eval_context(  # 构建评估上下文
+            eval_split="valid",
+            sasrec_recall_csv=args.sasrec_recall_csv,
+            candidate_csv=args.candidate_csv,
+            strict=args.strict,
+            final_top_k=args.final_top_k,
+        )
         best_weights, best_map = search_best_weights(  # 执行权重搜索
             context, step=args.step, exclude_seen=False, max_passes=args.max_passes  # 不排除已购
         )  # 搜索完成
@@ -355,6 +376,9 @@ def main() -> None:  # 命令行入口函数
         output_json=args.output_json,  # 传入输出路径
         sasrec_recall_csv=args.sasrec_recall_csv,  # 传入序列模型召回 CSV
         compare_exclude_seen=True,  # 启用两种模式对比
+        candidate_csv=args.candidate_csv,  # 已物化候选
+        strict=args.strict,  # 严格依赖检查
+        final_top_k=args.final_top_k,  # 最终排序长度
     )  # 权重搜索流程结束
 
 

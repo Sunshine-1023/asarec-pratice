@@ -8,6 +8,8 @@ from pathlib import Path  # 路径对象
 
 import pandas as pd  # 数据处理
 
+from src.domain.ids import canonical_item_id  # 统一商品 ID 契约
+
 
 RAW_ARTICLES_PATH = Path("data/raw/articles.csv")  # H&M 商品元数据原始文件
 SEQ_DATASET_DIR = Path("data/processed/hm_seq")  # hm_seq 数据目录
@@ -42,9 +44,7 @@ ITEM_FILE_COLUMNS = [  # RecBole .item 文件输出字段（含类型后缀）
 
 
 def _normalize_item_id(value: object) -> str:  # 统一商品 ID 为 10 位字符串
-    text = str(value).strip()  # 转字符串并去掉首尾空白
-    text = re.sub(r"\.0+$", "", text)  # 去除可能的浮点后缀
-    return text.zfill(10)  # 左侧补零到 10 位
+    return canonical_item_id(value)  # 保留旧函数名，统一委托领域契约
 
 
 def _clean_category_token(value: object) -> str:  # 清洗类别字段为安全 token

@@ -9,6 +9,8 @@ from typing import Literal  # 导入字面量类型
 
 import pandas as pd  # 导入 pandas 数据分析库
 
+from src.domain.ids import canonical_item_id, canonical_user_id  # 统一 ID 契约
+
 MAX_USER_HISTORY = 100  # 每用户保留的最大历史条数（与序列模型 MAX_ITEM_LIST_LENGTH 对齐）
 
 ActivityTier = Literal["high", "medium", "low", "cold_start"]  # 用户活跃度分层
@@ -63,22 +65,28 @@ def build_user_history(  # 从交互文件构建每用户有序历史
     """Build per-user ordered history from one or more .inter files."""  # 从一个或多个 .inter 文件构建每用户有序历史
     frames = []  # 初始化 DataFrame 列表
     for path in inter_paths:  # 遍历每个交互文件路径
-        df = pd.read_csv(path, sep="\t", usecols=["user_id:token", "item_id:token", "timestamp:float"])  # 读取用户、物品与时间戳列
+        df = pd.read_csv(  # 读取用户、物品与时间戳列
+            path,
+            sep="\t",
+            usecols=["user_id:token", "item_id:token", "timestamp:float"],
+            dtype={"user_id:token": "string", "item_id:token": "string"},
+        )
+        df["user_id:token"] = df["user_id:token"].map(canonical_user_id)  # 统一用户 ID
+        df["item_id:token"] = df["item_id:token"].map(canonical_item_id)  # 统一商品 ID
         frames.append(df)  # 将当前 DataFrame 加入列表
     merged = pd.concat(frames, ignore_index=True)  # 合并所有交互记录
     merged = merged.sort_values(["user_id:token", "timestamp:float"])  # 按用户与时间戳排序
     history = (  # 构建用户到物品序列的映射
         merged.groupby("user_id:token")["item_id:token"]  # 按用户分组并取物品列
-        .apply(lambda s: [str(x) for x in s.tolist()[-max_user_history:]])  # 每用户只保留最近 N 条
+        .apply(lambda s: [canonical_item_id(x) for x in s.tolist()[-max_user_history:]])  # 每用户只保留最近 N 条
         .to_dict()  # 转为字典
     )  # 结束历史映射构建
     return history  # 返回用户历史字典
 
 
 def normalize_item_id(item_id: str) -> str:  # 统一 item_id 格式（hm 与 hm_seq/RecBole 导出）
-    """Strip leading zeros from numeric IDs so hm_seq tokens match hm.inter labels."""  # 去除数字 ID 前导零，使 hm_seq 与 hm.inter 标签一致
-    s = str(item_id).strip()  # 转为字符串并去除首尾空白
-    return str(int(s)) if s.isdigit() else s  # 数字 ID 去前导零，非数字原样返回
+    """Return the shared ten-character H&M item ID representation."""  # 返回统一十位商品 ID
+    return canonical_item_id(item_id)  # 保留兼容函数名，委托领域契约
 
 
 def load_channel_recall_csv(  # 加载单通道召回 CSV 文件
@@ -97,7 +105,7 @@ def load_channel_recall_csv(  # 加载单通道召回 CSV 文件
     with path.open("r", newline="", encoding="utf-8") as f:  # 以 UTF-8 打开 CSV 文件
         reader = csv.DictReader(f)  # 创建字典形式 CSV 读取器
         for row in reader:  # 逐行读取召回记录
-            uid = str(row[user_col])  # 读取并规范化用户 ID
+            uid = canonical_user_id(row[user_col])  # 读取并规范化用户 ID
             iid = normalize_item_id(row[item_col])  # 读取并规范化物品 ID
             score = float(row.get(score_col, 0.0))  # 读取分数，缺失时默认为 0.0
             rank = int(row.get(rank_col, 999999))  # 读取排名，缺失时默认为 999999
@@ -117,7 +125,7 @@ def fuse_candidates(  # 对多通道候选进行加权融合
     exclude_seen: bool = False,  # 是否排除历史已购商品
 ) -> list[tuple[str, float]]:  # 返回融合后的 (物品, 分数) 列表
     """Weighted rank fusion: weight * (1 / (rank + 1)), summed over channels."""  # 加权倒数排名融合：各通道 weight * (1/(rank+1)) 求和
-    history = {str(x) for x in user_history} if exclude_seen else set()  # 按需构建历史过滤集合
+    history = {canonical_item_id(x) for x in user_history} if exclude_seen else set()  # 按需构建历史过滤集合
     merged_scores: dict[str, float] = defaultdict(float)  # 初始化融合得分字典
 
     for channel, candidates in channel_candidates.items():  # 遍历每个召回通道
@@ -125,7 +133,7 @@ def fuse_candidates(  # 对多通道候选进行加权融合
         if w <= 0:  # 若权重非正
             continue  # 跳过该通道
         for rank, (item_id, _) in enumerate(candidates):  # 按排名遍历通道候选
-            item_id = str(item_id)  # 规范化物品 ID
+            item_id = canonical_item_id(item_id)  # 规范化物品 ID
             if item_id in history:  # 排除已购（可选）
                 continue  # 跳过历史已购物品
             merged_scores[item_id] += w * (1.0 / (rank + 1))  # 累加加权倒数排名得分
