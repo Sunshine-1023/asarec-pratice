@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.data.build_sequences import prepare_recbole_benchmark_files, read_max_item_list_length
+from fashionrec.data.build_sequences import prepare_recbole_benchmark_files, read_max_item_list_length
 
 
 def _write_inter(path: Path, rows: list[tuple[str, str, int]]) -> None:

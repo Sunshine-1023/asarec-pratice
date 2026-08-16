@@ -1,5 +1,7 @@
 # 第一版 RecBole 口徑對比表（SASRec / Pop / ItemKNN / Fusion）
 
+> 本文保留实验发生时的历史命令；当前项目请使用 `make help` 查看统一入口。
+
 > **評估協議**：RecBole full ranking，`hm_seq` benchmark（train / valid / test）  
 > **Checkpoint**：`outputs/checkpoints/sasrec/SASRec-Jul-08-2026_17-34-54.pth`  
 > **實驗批次**：2026-07-08 第一版（詳見 `v1_experiment_report.md`）

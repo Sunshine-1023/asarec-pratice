@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pandas as pd
 
-from run_sasrec import fit_model_without_test_evaluation
-from src.training.checkpoint_selection import (
+from fashionrec.training.command import fit_model_without_test_evaluation
+from fashionrec.training.checkpoint_selection import (
     load_valid_user_week_targets,
     select_checkpoint_by_score,
     user_week_map_at_k,
 )
-from src.training.checkpoints import install_improving_checkpoint_snapshots
+from fashionrec.training.checkpoints import install_validation_checkpoint_shortlist
 
 
 class _FitOnlyTrainer:
@@ -38,20 +38,65 @@ def test_training_helper_never_invokes_test_evaluation() -> None:
     assert trainer.evaluate_calls == 0
 
 
-def test_improving_checkpoint_hook_preserves_bounded_shortlist(tmp_path: Path) -> None:
-    class FakeTrainer:
-        saved_model_file = tmp_path / "recbole_best.pth"
+def test_validation_checkpoint_hook_preserves_true_metric_top_n(tmp_path: Path) -> None:
+    class FakeModel:
+        def __init__(self) -> None:
+            self.value = 0
 
-        def _save_checkpoint(self, epoch: int, **_kwargs) -> None:
-            self.saved_model_file.write_bytes(f"epoch-{epoch}".encode())
+        def state_dict(self):
+            return {"value": self.value}
+
+        def other_parameter(self):
+            return None
+
+    class FakeOptimizer:
+        def state_dict(self):
+            return {}
+
+    class FakeTrainer:
+        config = {"valid_metric_bigger": True}
+        model = FakeModel()
+        optimizer = FakeOptimizer()
+        scores = iter((0.40, 0.20, 0.30))
+
+        def _valid_epoch(self, *_args, **_kwargs):
+            score = next(self.scores)
+            self.model.value += 1
+            return score, {"metric": score}
 
     trainer = FakeTrainer()
-    snapshots = install_improving_checkpoint_snapshots(trainer, tmp_path / "shortlist", max_candidates=2)
-    for epoch in (1, 2, 3):
-        trainer._save_checkpoint(epoch)
+    snapshots = install_validation_checkpoint_shortlist(trainer, tmp_path / "shortlist", max_candidates=2)
+    for _ in range(3):
+        trainer._valid_epoch(None)
 
-    assert [path.name for path in snapshots] == ["candidate_epoch_0002.pth", "candidate_epoch_0003.pth"]
-    assert not (tmp_path / "shortlist" / "candidate_epoch_0001.pth").exists()
+    assert [path.name for path in snapshots] == ["candidate_eval_0001.pth", "candidate_eval_0003.pth"]
+    assert not (tmp_path / "shortlist" / "candidate_eval_0002.pth").exists()
+    manifest = json.loads((tmp_path / "shortlist" / "shortlist_manifest.json").read_text())
+    assert [row["coarse_valid_score"] for row in manifest["candidates"]] == [0.40, 0.30]
+
+
+def test_validation_checkpoint_hook_rejects_non_empty_shortlist_without_deleting_it(tmp_path: Path) -> None:
+    class FakeModel:
+        def state_dict(self):
+            return {}
+
+    class FakeTrainer:
+        config = {"valid_metric_bigger": True}
+        model = FakeModel()
+
+        def _valid_epoch(self, *_args, **_kwargs):
+            return 0.1, {"metric": 0.1}
+
+    shortlist = tmp_path / "shortlist"
+    shortlist.mkdir()
+    stale = shortlist / "candidate_eval_0001.pth"
+    stale.write_bytes(b"existing checkpoint")
+
+    import pytest
+
+    with pytest.raises(FileExistsError, match="must be empty"):
+        install_validation_checkpoint_shortlist(FakeTrainer(), shortlist, max_candidates=2)
+    assert stale.read_bytes() == b"existing checkpoint"
 
 
 def test_checkpoint_selection_uses_complete_valid_user_week_map(tmp_path: Path) -> None:

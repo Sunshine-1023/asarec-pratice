@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from src.domain.candidates import Candidate
-from src.ranking.features import build_ranking_features, lambda_rank_group_sizes
-from src.ranking.weighted_rrf import WeightedRRFRanker
+from fashionrec.domain.candidates import Candidate
+from fashionrec.ranking.features import build_ranking_features, lambda_rank_group_sizes
+from fashionrec.ranking.weighted_rrf import WeightedRRFRanker
 
 
 def test_weighted_rrf_ranker_implements_stable_ranking_contract() -> None:

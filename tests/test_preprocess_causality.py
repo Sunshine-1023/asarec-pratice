@@ -6,7 +6,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.data.preprocess import load_transactions
+import fashionrec.data.preprocess as preprocess
+from fashionrec.data.command import select_transactions_input
+from fashionrec.data.preprocess import load_transactions
 
 
 def _write_transactions(path: Path, rows: list[tuple[str, str, str]]) -> None:
@@ -42,3 +44,24 @@ def test_preprocess_does_not_truncate_history_before_split(tmp_path: Path) -> No
     interactions = load_transactions(source, weeks=6, max_user_history=100)
 
     assert (interactions["user_id:token"] == "long_history").sum() == 105
+
+
+def test_default_preprocess_input_never_reuses_existing_filtered_file(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    raw = tmp_path / "raw.csv"
+    filtered = tmp_path / "filtered.csv"
+    _write_transactions(raw, [("raw_user", "1", "2020-09-22")])
+    _write_transactions(filtered, [("stale_filtered_user", "2", "2020-09-22")])
+    monkeypatch.setattr(preprocess, "RAW_PATH", raw)
+    monkeypatch.setattr(preprocess, "FILTERED_RAW_PATH", filtered)
+
+    interactions = preprocess.load_transactions(weeks=1)
+
+    assert interactions["user_id:token"].tolist() == ["raw_user"]
+
+
+def test_data_prep_selects_filtered_input_only_when_requested() -> None:
+    assert select_transactions_input(with_filter=False) == preprocess.RAW_PATH
+    assert select_transactions_input(with_filter=True) == preprocess.FILTERED_RAW_PATH

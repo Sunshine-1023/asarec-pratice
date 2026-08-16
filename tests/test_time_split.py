@@ -7,7 +7,7 @@ from pathlib import Path  # 路径
 import pandas as pd  # 读写切分结果
 import pytest  # 断言
 
-from src.data.split import (  # 切分
+from fashionrec.data.split import (  # 切分
     INTERACTION_SORT_COLUMNS,  # 排序键
     build_model_train_split,
     history_paths_for_eval,  # 历史路径

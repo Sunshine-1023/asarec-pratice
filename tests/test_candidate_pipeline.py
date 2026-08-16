@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.candidates.union import union_candidates
-from src.recall.generator import generate_candidates
+from fashionrec.candidates.union import union_candidates
+from fashionrec.recall.generator import generate_candidates
 
 
 @dataclass

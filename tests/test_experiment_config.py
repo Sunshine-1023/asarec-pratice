@@ -7,12 +7,12 @@ from pathlib import Path  # 路径
 import pytest  # 测试框架
 import yaml  # 写临时 YAML
 
-from src.experiment.config import (  # 配置加载
+from fashionrec.experiment.config import (  # 配置加载
     ExperimentConfigError,  # 配置错误
     classify_activity_tier,  # 分层
     load_experiment_config,  # 加载
 )  # 导入结束
-from src.fusion.weighted_fusion import classify_activity_tier as fusion_classify  # 现有融合分层，用于对齐
+from fashionrec.ranking.fusion import classify_activity_tier as fusion_classify  # 现有融合分层，用于对齐
 
 
 def test_default_experiment_config_loads() -> None:  # 默认 YAML 能加载且类型正确

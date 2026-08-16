@@ -6,14 +6,14 @@ from pathlib import Path  # 路径
 
 import pytest  # 断言
 
-from run_baseline import (  # 基线脚本中的协议函数
+from fashionrec.evaluation.baseline_command import (  # 基线命令中的协议函数
     assert_not_tuning_on_test,  # test 禁止搜权
     collect_baseline_variants,  # 变体收集
     load_frozen_fusion_weights,  # 只加载冻结权重
 )  # 导入结束
-from src.evaluate.experiment_report import save_experiment_outputs, score_users  # 报告
-from src.evaluate.offline_eval import FusionEvalContext  # 假上下文
-from src.experiment.config import load_experiment_config  # 配置
+from fashionrec.evaluation.experiment_report import save_experiment_outputs, score_users  # 报告
+from fashionrec.evaluation.offline_eval import FusionEvalContext  # 假上下文
+from fashionrec.experiment.config import load_experiment_config  # 配置
 
 
 def test_score_users_reports_all_four_tiers() -> None:  # 四个活跃度层级都要出现

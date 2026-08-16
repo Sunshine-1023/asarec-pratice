@@ -4,7 +4,7 @@ from __future__ import annotations  # 延迟注解
 
 from pathlib import Path  # 路径
 
-from src.data.manifest import (  # 清单工具
+from fashionrec.data.manifest import (  # 清单工具
     build_manifest,  # 组装
     canonical_manifest,  # 去掉生成时间
     sha256_file,  # 哈希

@@ -4,8 +4,8 @@ from __future__ import annotations  # 延迟注解
 
 import pytest  # 近似比较
 
-from src.evaluate.metrics import hit_at_k, map_at_k, ndcg_at_k, recall_at_k  # 统一指标
-from src.fusion.weighted_fusion import normalize_item_id  # 融合侧 ID 规范化
+from fashionrec.evaluation.metrics import hit_at_k, map_at_k, ndcg_at_k, recall_at_k  # 统一指标
+from fashionrec.ranking.fusion import normalize_item_id  # 融合侧 ID 规范化
 
 
 def test_map_at_12_respects_rank_and_unique_targets() -> None:  # 计划中的核心样例
@@ -55,7 +55,7 @@ def test_metrics_are_consistent_with_leading_zeros() -> None:  # 前导零规范
 
 
 def test_fusion_merges_padded_and_unpadded_same_item_once() -> None:  # 跨通道同商品只保留一次
-    from src.fusion.weighted_fusion import fuse_candidates  # 局部导入保持测试依赖清晰
+    from fashionrec.ranking.fusion import fuse_candidates  # 局部导入保持测试依赖清晰
 
     fused = fuse_candidates(  # 两个通道使用不同 ID 表示
         user_id="u1",

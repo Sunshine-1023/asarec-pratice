@@ -3,6 +3,7 @@
 Thumbs.db
 .idea/
 .vscode/
+.planning/
 *.swp
 *.swo
 
@@ -59,4 +60,3 @@ events.out.tfevents*
 
 # Logs / temp
 *.log
-

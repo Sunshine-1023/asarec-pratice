@@ -1,5 +1,7 @@
 # SASRecF 四路融合實驗報告（第二版主線）
 
+> 本文保留实验发生时的历史命令；当前项目请使用 `make help` 查看统一入口。
+
 > **實驗日期**：2026-07-09  
 > **數據集**：H&M Personalized Fashion Recommendations（Kaggle）  
 > **主框架**：RecBole 1.2.1 + 專案自研離線評估  

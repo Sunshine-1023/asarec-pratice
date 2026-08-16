@@ -108,14 +108,13 @@ FashionRec-Transformer/
 │   ├── checkpoints/sasrecf/      # 训练好的模型权重
 │   ├── recommendations/            # 召回 & 融合结果 CSV
 │   └── evaluation/                 # 评估指标 JSON
-├── src/
+├── src/fashionrec/
 │   ├── data/                     # 数据预处理
 │   ├── recall/                   # 各路召回逻辑
-│   ├── fusion/                   # 加权融合
-│   └── evaluate/                 # 离线评估 & 权重搜索
-├── run_sasrecf.py                # 训练 SASRecF 入口
-├── run_sasrecf_recall.py         # 导出 SASRecF 召回
-├── run_fusion_weight_search.py   # valid 权重搜索入口
+│   ├── ranking/                  # 加权融合与排序
+│   └── evaluation/               # 离线评估 & 权重搜索
+├── Makefile                      # 统一训练与评估入口
+├── pyproject.toml                # fashionrec 命令注册
 └── docs/
     └── PROJECT_GUIDE.md          # 本文档
 ```
@@ -131,25 +130,25 @@ FashionRec-Transformer/
 └────────────────────────────┬────────────────────────────────────┘
                              │
               ┌──────────────┴──────────────┐
-              │  可选: src/data/filter.py    │  缩小数据，加快实验
+              │  可选: src/fashionrec/data/filter.py    │  缩小数据，加快实验
               └──────────────┬──────────────┘
                              │
               ┌──────────────┴──────────────┐
-              │  src/data/preprocess.py      │  CSV → hm.inter
-              │  src/data/split.py           │  4w train + 1w valid + 1w test
+              │  src/fashionrec/data/preprocess.py      │  CSV → hm.inter
+              │  src/fashionrec/data/split.py           │  4w train + 1w valid + 1w test
               └──────────────┬──────────────┘
                              │
          ┌───────────────────┴───────────────────┐
          │                                       │
          ▼                                       ▼
-  data/processed/hm/                    run_sasrecf.py
+  data/processed/hm/                    make train
   (主评估口径)                          ├─ 转 hm_seq 序列格式
          │                              ├─ build_item_features
          │                              └─ RecBole 训练 SASRecF
          │                                       │
          │                              outputs/checkpoints/sasrecf/
          │                                       │
-         │                              run_sasrecf_recall.py
+         │                              make recall
          │                              → sasrecf_valid.csv / test.csv
          │                                       │
          └───────────────────┬───────────────────┘
@@ -198,8 +197,8 @@ t_dat,customer_id,article_id,price,sales_channel_id
 
 ### 5.2 可选：数据过滤（小规模快速实验）
 
-**脚本：** `python -m src.data.filter`  
-**代码：** `src/data/filter.py`
+**入口：** `make data RUN_ID=exp-001 WITH_FILTER=1`
+**代码：** `src/fashionrec/data/filter.py`
 
 如果你电脑跑不动全量数据，可以先采样：
 
@@ -210,19 +209,19 @@ t_dat,customer_id,article_id,price,sales_channel_id
 | 活跃用户 | 购买 ≥ 5 次 |
 | 每用户最多行为 | 50 条 |
 
-输出到 `data/raw/filtered/`，后续 `preprocess` 会**自动优先使用**过滤后的数据。
+输出到 `data/raw/filtered/`，且只在本次明确设置 `WITH_FILTER=1` 时使用；历史 filtered 文件不会被自动复用。
 
 ### 5.3 预处理：转成 RecBole 格式
 
-**脚本：** `python -m src.data.preprocess`  
-**代码：** `src/data/preprocess.py`
+**入口：** `make data RUN_ID=exp-001`
+**代码：** `src/fashionrec/data/preprocess.py`
 
 做了什么：
 
 1. 读取 `transactions_train.csv`
 2. 只保留最近 **6 周** 数据
-3. 过滤掉购买次数 < 5 的用户
-4. 转成 RecBole 标准三列格式
+3. 转成 RecBole 标准三列格式
+4. 在时间切分后仅用 train 统计模型训练用户资格
 
 输出文件：`data/processed/hm/hm.inter`
 
@@ -234,8 +233,8 @@ user_id:token    item_id:token    timestamp:float
 
 ### 5.4 时序切分：train / valid / test
 
-**脚本：** `python -m src.data.split`  
-**代码：** `src/data/split.py`
+**入口：** `make data RUN_ID=exp-001`
+**代码：** `src/fashionrec/data/split.py`
 
 把 6 周数据按时间切成三段（**不能随机打乱，必须按时间**）：
 
@@ -281,19 +280,18 @@ user_id:token    item_id:token    timestamp:float
 ### 6.2 训练入口
 
 ```bash
-python run_sasrecf.py
+make train RUN_ID=exp-001
 ```
 
-等价于 `python run_sasrec.py --config configs/sasrecf.yaml`
+底层实现是 `PYTHONPATH=src python -m fashionrec train`。
 
-**`run_sasrecf.py` 会自动帮你做这些事：**
+训练前必须先通过 `make data RUN_ID=exp-001` 准备固定数据产物。训练阶段只负责：
 
 ```
-1. preprocess + split        （若没加 --skip-preprocess）
-2. hm.*.inter → hm_seq.*.inter  （转成序列样本格式）
-3. build_item_features       （从 articles.csv 生成 hm_seq.item）
-4. RecBole 训练 SASRecF      （早停指标 MAP@12）
-5. 保存 checkpoint           → outputs/checkpoints/sasrecf/*.pth
+1. 读取已准备的 hm_seq 数据
+2. RecBole 训练 SASRecF
+3. 按 RecBole-valid 指标保留 checkpoint shortlist
+4. 保存训练报告与 checkpoint 到当前 run 目录
 ```
 
 ### 6.3 hm → hm_seq 转换做了什么？
@@ -326,10 +324,11 @@ python run_sasrecf.py
 | `recall_top_k` | 100 | 召回先取 Top-100 |
 | `checkpoint_dir` | outputs/checkpoints/sasrecf | 模型保存位置 |
 
-### 6.5 数据已准备好时跳过预处理
+### 6.5 数据准备与训练分开执行
 
 ```bash
-python run_sasrecf.py --skip-preprocess
+make data RUN_ID=exp-001 WITH_FILTER=1
+make train RUN_ID=exp-001
 ```
 
 ---
@@ -342,18 +341,17 @@ python run_sasrecf.py --skip-preprocess
 
 | 通道 | 代码文件 | 核心思路 | 默认 Top-K |
 |------|----------|----------|------------|
-| **SASRecF** | `src/recall/sasrec_recall.py` | 深度学习序列预测 | 100 |
-| **Popular** | `src/recall/popular.py` | 全局时间衰减热门 | 50 |
-| **Category Popular** | `src/recall/category_popular.py` | 用户买过的类别里的热门 | 50 |
-| **Item2Item** | `src/recall/item2item.py` | 「买了 A 的人也买了 B」 | 50 |
+| **SASRecF** | `src/fashionrec/recall/sasrec_recall.py` | 深度学习序列预测 | 100 |
+| **Popular** | `src/fashionrec/recall/popular.py` | 全局时间衰减热门 | 50 |
+| **Category Popular** | `src/fashionrec/recall/category_popular.py` | 用户买过的类别里的热门 | 50 |
+| **Item2Item** | `src/fashionrec/recall/item2item.py` | 「买了 A 的人也买了 B」 | 50 |
 
 ### 7.2 通道 1：SASRecF（需要单独导出）
 
-**脚本：**
+**入口：**
 
 ```bash
-python run_sasrecf_recall.py --eval-split valid
-python run_sasrecf_recall.py --eval-split test
+make recall RUN_ID=exp-001
 ```
 
 **输出：**
@@ -379,7 +377,7 @@ user_id,item_id,score,rank,channel
 
 ### 7.3 通道 2：Popular（全局热门）
 
-**代码：** `src/recall/popular.py`  
+**代码：** `src/fashionrec/recall/popular.py`
 **无需单独跑脚本**，在 `offline_eval` 时自动计算。
 
 **逻辑：**
@@ -394,7 +392,7 @@ hot_score = 0.5×最近1周热度 + 0.3×最近2周 + 0.15×最近4周 + 0.05×�
 
 ### 7.4 通道 3：Category Popular（类别热门）
 
-**代码：** `src/recall/category_popular.py`
+**代码：** `src/fashionrec/recall/category_popular.py`
 
 **逻辑（分 4 步）：**
 
@@ -409,7 +407,7 @@ hot_score = 0.5×最近1周热度 + 0.3×最近2周 + 0.15×最近4周 + 0.05×�
 
 ### 7.5 通道 4：Item2Item（商品共现）
 
-**代码：** `src/recall/item2item.py`
+**代码：** `src/fashionrec/recall/item2item.py`
 
 **逻辑：**
 
@@ -437,7 +435,7 @@ hot_score = 0.5×最近1周热度 + 0.3×最近2周 + 0.15×最近4周 + 0.05×�
 
 ### 8.1 融合代码
 
-**文件：** `src/fusion/weighted_fusion.py`  
+**文件：** `src/fashionrec/ranking/fusion.py`
 **核心函数：** `fuse_candidates()`
 
 ### 8.2 融合公式
@@ -502,15 +500,15 @@ final_score[item] = Σ (通道权重 × rank_score)
 
 ```bash
 # 验证集（调参 / 看效果）
-python -m src.evaluate.offline_eval --eval-split valid
+PYTHONPATH=src python -m fashionrec evaluate --eval-split valid
 
 # 测试集（用搜索到的最佳权重）
-python -m src.evaluate.offline_eval \
+PYTHONPATH=src python -m fashionrec evaluate \
   --eval-split test \
   --weights-json outputs/evaluation/best_fusion_weights.json
 ```
 
-**代码：** `src/evaluate/offline_eval.py`
+**代码：** `src/fashionrec/evaluation/offline_eval.py`
 
 ### 9.2 评估流程（每个用户）
 
@@ -568,12 +566,10 @@ AP@12 = (0.5 + 0.4) / min(2, 12) = 0.9 / 2 = 0.45
 ### 10.2 入口
 
 ```bash
-python run_fusion_weight_search.py
-# 或
-python -m src.evaluate.weight_search --eval-split valid
+make weights RUN_ID=exp-001
 ```
 
-**代码：** `src/evaluate/weight_search.py`
+**代码：** `src/fashionrec/evaluation/weight_search.py`
 
 ### 10.3 搜索策略
 
@@ -618,60 +614,35 @@ pip install -r requirements.txt
 ### 11.2 标准全流程（推荐顺序）
 
 ```bash
-# ── 第 1 步：数据准备 ──
-# 可选：小规模采样
-python -m src.data.filter
-
-# 必需：预处理 + 切分
-python -m src.data.preprocess
-python -m src.data.split
-
-# ── 第 2 步：训练 SASRecF ──
-python run_sasrecf.py --skip-preprocess
-
-# ── 第 3 步：导出 SASRecF 召回 ──
-python run_sasrecf_recall.py --eval-split valid
-python run_sasrecf_recall.py --eval-split test
-
-# ── 第 4 步：valid 权重搜索 ──
-python run_fusion_weight_search.py
-
-# ── 第 5 步：离线评估 ──
-# valid：看调参效果
-python run_offline_eval.py --eval-split valid
-
-# test：最终成绩（用搜索到的权重）
-python run_offline_eval.py \
-  --eval-split test \
-  --weights-json outputs/evaluation/best_fusion_weights.json
+make data RUN_ID=exp-001 WITH_FILTER=1
+make train RUN_ID=exp-001
+make select-checkpoint RUN_ID=exp-001
+make recall RUN_ID=exp-001
+make candidates RUN_ID=exp-001
+make weights RUN_ID=exp-001
+make evaluate RUN_ID=exp-001
 ```
 
 ### 11.3 一键从头跑（含数据预处理）
 
-若数据还没处理过，训练脚本会自动 preprocess + split：
+新实验可以让流水线自动创建 run ID 并按正确顺序执行：
 
 ```bash
-python run_sasrecf.py
-python run_sasrecf_recall.py --eval-split valid
-python run_sasrecf_recall.py --eval-split test
-python run_fusion_weight_search.py
-python run_offline_eval.py --eval-split test \
-  --weights-json outputs/evaluation/best_fusion_weights.json
+make pipeline WITH_FILTER=1
 ```
 
 ### 11.4 各步骤对应文件速查
 
 | 步骤 | 运行命令 | 核心代码 |
 |------|----------|----------|
-| 过滤 | `python -m src.data.filter` | `src/data/filter.py` |
-| 预处理 | `python -m src.data.preprocess` | `src/data/preprocess.py` |
-| 切分 | `python -m src.data.split` | `src/data/split.py` |
-| 商品特征 | （训练时自动） | `src/data/build_item_features.py` |
-| 训练 | `python run_sasrecf.py` | `run_sasrec.py` + `configs/sasrecf.yaml` |
-| SASRecF 召回 | `python run_sasrecf_recall.py` | `src/recall/sasrec_recall.py` |
-| 权重搜索 | `python run_fusion_weight_search.py` | `src/evaluate/weight_search.py` |
-| 融合评估 | `python run_offline_eval.py` | `src/evaluate/offline_eval.py` |
-| 融合逻辑 | （评估时自动） | `src/fusion/weighted_fusion.py` |
+| 数据准备 | `make data RUN_ID=<id>` | `src/fashionrec/data/` |
+| 商品特征 | `make data RUN_ID=<id>` | `src/fashionrec/data/build_item_features.py` |
+| 训练 | `make train RUN_ID=<id>` | `src/fashionrec/training/` + `configs/sasrecf.yaml` |
+| SASRecF 召回 | `make recall RUN_ID=<id>` | `src/fashionrec/recall/sasrec_recall.py` |
+| 候选物化 | `make candidates RUN_ID=<id>` | `src/fashionrec/recall/rule_recall_export.py` |
+| 权重搜索 | `make weights RUN_ID=<id>` | `src/fashionrec/evaluation/weight_search.py` |
+| 融合评估 | `make evaluate RUN_ID=<id>` | `src/fashionrec/evaluation/offline_eval.py` |
+| 融合逻辑 | （评估时自动） | `src/fashionrec/ranking/fusion.py` |
 
 ---
 
@@ -755,7 +726,7 @@ RecBole 原生评估的平行实验线，和主线 `offline_eval` 评估口径�
 先跑召回导出：
 
 ```bash
-python run_sasrecf_recall.py --eval-split valid
+make recall RUN_ID=exp-001
 ```
 
 ### Q8：报错找不到 `hm.train.inter` 怎么办？
@@ -763,8 +734,7 @@ python run_sasrecf_recall.py --eval-split valid
 先跑数据准备：
 
 ```bash
-python -m src.data.preprocess
-python -m src.data.split
+make data RUN_ID=exp-001
 ```
 
 ---
@@ -787,19 +757,19 @@ python -m src.data.split
 
 | 文件 | 职责 |
 |------|------|
-| `src/data/filter.py` | 原始数据采样过滤 |
-| `src/data/preprocess.py` | 交易 CSV → hm.inter |
-| `src/data/split.py` | 时序切分 train/valid/test |
-| `src/data/build_item_features.py` | articles.csv → hm_seq.item |
-| `run_sasrec.py` | RecBole 训练主逻辑 |
-| `run_sasrecf.py` | SASRecF 训练入口 |
-| `src/recall/sasrec_recall.py` | SASRecF Top-K 导出 |
-| `src/recall/popular.py` | 全局热门召回 |
-| `src/recall/category_popular.py` | 类别热门召回 |
-| `src/recall/item2item.py` | 商品共现召回 |
-| `src/fusion/weighted_fusion.py` | 多路加权 rank 融合 |
-| `src/evaluate/offline_eval.py` | 融合 + MAP@12 评估 |
-| `src/evaluate/weight_search.py` | valid 权重网格搜索 |
+| `src/fashionrec/data/filter.py` | 原始数据采样过滤 |
+| `src/fashionrec/data/preprocess.py` | 交易 CSV → hm.inter |
+| `src/fashionrec/data/split.py` | 时序切分 train/valid/test |
+| `src/fashionrec/data/build_item_features.py` | articles.csv → hm_seq.item |
+| `src/fashionrec/training/command.py` | RecBole 训练主逻辑 |
+| `src/fashionrec/pipeline/command.py` | 正式流水线编排 |
+| `src/fashionrec/recall/sasrec_recall.py` | SASRecF Top-K 导出 |
+| `src/fashionrec/recall/popular.py` | 全局热门召回 |
+| `src/fashionrec/recall/category_popular.py` | 类别热门召回 |
+| `src/fashionrec/recall/item2item.py` | 商品共现召回 |
+| `src/fashionrec/ranking/fusion.py` | 多路加权 rank 融合 |
+| `src/fashionrec/evaluation/offline_eval.py` | 融合 + MAP@12 评估 |
+| `src/fashionrec/evaluation/weight_search.py` | valid 权重网格搜索 |
 | `configs/sasrecf.yaml` | SASRecF 超参数配置 |
 
 ---

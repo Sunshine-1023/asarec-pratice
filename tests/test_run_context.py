@@ -5,8 +5,8 @@ from __future__ import annotations  # 延迟注解
 import json  # 检查冻结配置
 from pathlib import Path  # 临时路径
 
-from src.experiment.artifacts import RunArtifacts  # 产物路径
-from src.experiment.context import create_run_context  # 上下文工厂
+from fashionrec.experiment.artifacts import RunArtifacts  # 产物路径
+from fashionrec.experiment.context import create_run_context  # 上下文工厂
 
 
 def test_run_artifacts_are_isolated_by_run_id(tmp_path: Path) -> None:  # 不同实验不覆盖

@@ -7,14 +7,14 @@ from pathlib import Path  # 路径
 import pandas as pd  # 表格
 import pytest  # 断言
 
-from src.data.split import (  # 切分与 as-of 特征
+from fashionrec.data.split import (  # 切分与 as-of 特征
     assert_history_paths_allowed,  # 路径检查
     item_popularity_as_of,  # 热度
     user_item_counts_as_of,  # 用户偏好
     validate_time_split,  # 时间因果
 )  # 导入结束
-from src.data.filter import fit_train_item_universe
-from src.recall.popular import build_popular_index  # 热门索引
+from fashionrec.data.filter import fit_train_item_universe
+from fashionrec.recall.popular import build_popular_index  # 热门索引
 
 
 def _unix(date: str) -> int:  # 日期转 Unix 秒（UTC）

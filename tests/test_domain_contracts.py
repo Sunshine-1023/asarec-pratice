@@ -4,8 +4,8 @@ from __future__ import annotations  # 延迟注解
 
 import pytest  # 异常与近似断言
 
-from src.domain.candidates import Candidate  # 候选结构
-from src.domain.ids import canonical_item_id, canonical_user_id, submission_item_id  # ID 规范
+from fashionrec.domain.candidates import Candidate  # 候选结构
+from fashionrec.domain.ids import canonical_item_id, canonical_user_id, submission_item_id  # ID 规范
 
 
 @pytest.mark.parametrize(  # 多种输入应映射为同一商品

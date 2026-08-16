@@ -1,5 +1,7 @@
 # 兩次實驗完整過程對照（Jul-08 vs Jul-09）
 
+> 本文保留实验发生时的历史命令；当前项目请使用 `make help` 查看统一入口。
+
 > 本文檔回溯兩次主線實驗的**完整執行過程**、關鍵決策、踩坑記錄與文檔缺口補遺。  
 > 詳細報告分別見：  
 > - 第一版：`v1_experiment_report.md` + `SASRec-hm_seq-Jul-08-2026_training_report.md`  

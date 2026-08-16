@@ -47,6 +47,6 @@ eval_step: 1
 stopping_step: 5
 train_neg_sample_args: null
 
-gpu_id: '0'  # GPU 编号（实际设备由 run_sasrec.py 自动选择 cuda/mps/cpu）
+gpu_id: '0'  # GPU 编号（实际设备由 fashionrec train 自动选择 cuda/mps/cpu）
 checkpoint_dir: outputs/checkpoints/sasrec  # 模型 checkpoint 保存目录
 log_wandb: False  # 是否启用 Weights & Biases 日志
