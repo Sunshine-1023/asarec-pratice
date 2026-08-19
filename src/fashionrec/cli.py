@@ -19,6 +19,7 @@ class CommandSpec:  # 单个子命令定义
 COMMANDS: dict[str, CommandSpec] = {  # 统一公开命令表
     "pipeline": CommandSpec("fashionrec.pipeline.command", "Run the complete formal pipeline"),  # 全流程
     "data": CommandSpec("fashionrec.data.command", "Prepare causal train/valid/test data"),  # 数据准备
+    "profile-data": CommandSpec("fashionrec.data.profile", "Profile raw transactions/customers/articles"),  # raw 数据体检
     "train": CommandSpec(  # SASRecF 训练
         "fashionrec.training.command",  # 训练命令模块
         "Train the sequence model",  # 帮助说明

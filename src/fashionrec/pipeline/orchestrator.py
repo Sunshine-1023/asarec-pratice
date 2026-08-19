@@ -26,6 +26,7 @@ class PipelineOptions:
     skip_valid_eval: bool = False
     skip_test_eval: bool = False
     weights_json: str | None = None  # 跳过搜索时可复用显式指定权重
+    build_backtest: bool = False  # 透传 data --build-backtest；默认关，避免训三遍
 
 
 def _cli_command(python_executable: str, command: str, *args: str) -> tuple[str, ...]:  # 组装统一 CLI 命令
@@ -46,9 +47,20 @@ def build_pipeline_steps(
     strict_args = ("--strict",) if context.strict else ()  # 兼容模式可显式关闭严格检查
 
     if not options.skip_data_prep:
-        command = list(_cli_command(python_executable, "data", "--experiment-config", config_path))
+        command = list(
+            _cli_command(
+                python_executable,
+                "data",
+                "--experiment-config",
+                config_path,
+                "--processed-dir",
+                str(artifacts.data),
+            )
+        )
         if options.with_filter:
             command.append("--with-filter")
+        if options.build_backtest:
+            command.append("--build-backtest")
         steps.append(PipelineStep("数据准备", tuple(command)))
 
     if not options.skip_train:

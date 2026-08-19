@@ -7,3 +7,4 @@ torch
 recbole
 pyyaml
 pytest
+pyarrow

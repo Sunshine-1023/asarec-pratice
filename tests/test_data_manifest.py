@@ -2,10 +2,13 @@
 
 from __future__ import annotations  # 延迟注解
 
+import json  # 检查清单中不引用全局旧路径
 from pathlib import Path  # 路径
 
 from fashionrec.data.manifest import (  # 清单工具
+    SCHEMA_VERSION,  # 当前行级 schema
     build_manifest,  # 组装
+    build_processed_hm_manifest,  # hm 处理后清单
     canonical_manifest,  # 去掉生成时间
     sha256_file,  # 哈希
     stream_inter_stats,  # 流式统计
@@ -63,3 +66,46 @@ def test_manifest_stable_except_generated_at(tmp_path: Path) -> None:  # 同一�
     assert "sha256" in first["files"]["hm.train.inter"]  # 训练文件有哈希
     assert first["files"]["hm.train.inter"]["n_rows"] == 2  # 训练两行
     assert first["split_bounds"]["valid_start"] == "2020-09-09"  # 边界写入
+    assert first["schema_version"] == SCHEMA_VERSION  # 语义版本
+    assert first["dataset_version"] == second["dataset_version"]  # 协议版本稳定
+    assert len(first["dataset_version"]) == 12  # 短哈希
+
+
+def test_processed_hm_manifest_records_true_raw_separately(tmp_path: Path) -> None:  # raw 与本次输入分开记
+    processed = tmp_path / "run-data"  # 模拟 outputs/runs/<id>/data
+    hm = processed / "hm"  # hm 目录
+    hm.mkdir(parents=True)  # 创建
+    raw = tmp_path / "transactions_train.csv"  # 真正 raw
+    filtered = tmp_path / "filtered_transactions.csv"  # 本 run filtered
+    raw.write_text("customer_id,article_id,t_dat\na,1,2020-09-22\n", encoding="utf-8")  # raw 内容
+    filtered.write_text("customer_id,article_id,t_dat\na,1,2020-09-22\n", encoding="utf-8")  # 相同内容不同路径
+    _write_inter(hm / "hm.inter", [("u1", "1", 10)])  # 全量
+    _write_inter(hm / "hm.train.inter", [("u1", "1", 10)])  # 训练
+    _write_inter(hm / "hm.model_train.inter", [("u1", "1", 10)])  # 模型训练
+    _write_inter(hm / "hm.valid.inter", [("u1", "2", 20)])  # 验证
+    _write_inter(hm / "hm.test.inter", [("u1", "3", 30)])  # 测试
+    preprocess = {"weeks": 6, "with_filter": True, "processed_dir": str(processed)}  # 协议
+    bounds = {"valid_start": "2020-09-09"}  # 边界
+    first = build_processed_hm_manifest(  # 第一次
+        processed_dir=processed,  # 本 run 目录
+        raw_transactions=filtered,  # 本次实际喂给 preprocess 的文件
+        true_raw_transactions=raw,  # 真正 raw
+        preprocess=preprocess,  # 参数
+        split_bounds=bounds,  # 边界
+        repo_root=tmp_path,  # 无 git
+    )  # 第一次结束
+    second = build_processed_hm_manifest(  # 第二次
+        processed_dir=processed,
+        raw_transactions=filtered,
+        true_raw_transactions=raw,
+        preprocess=preprocess,
+        split_bounds=bounds,
+        repo_root=tmp_path,
+    )  # 第二次结束
+    assert first["raw_transactions"]["path"] == str(raw)  # raw 单独记录
+    assert first["files"]["run_transactions_input"]["path"] == str(filtered)  # 本次输入是 filtered
+    assert first["files"]["hm.train.inter"]["n_users"] == 1  # 用户数
+    assert first["files"]["hm.train.inter"]["n_items"] == 1  # SKU 数
+    assert canonical_manifest(first) == canonical_manifest(second)  # 去掉 generated_at 后完全一致
+    assert first["schema_version"] == SCHEMA_VERSION  # schema
+    assert "data/raw/filtered" not in json.dumps(first)  # 不引用全局旧 filtered

@@ -8,7 +8,9 @@ import pandas as pd  # 表格
 import pytest  # 断言
 
 from fashionrec.data.split import (  # 切分与 as-of 特征
+    assert_history_has_no_future,  # 未来行必须失败
     assert_history_paths_allowed,  # 路径检查
+    filter_interactions_as_of,  # 静默截断
     item_popularity_as_of,  # 热度
     user_item_counts_as_of,  # 用户偏好
     validate_time_split,  # 时间因果
@@ -85,6 +87,26 @@ def test_as_of_features_ignore_label_week() -> None:  # 热度与用户偏好必
     assert popularity == {"hist": 2}  # 只统计历史两次
     assert prefs == {("u1", "hist"): 2}  # 标签周商品不进入用户偏好
     assert "label_only" not in popularity  # 明确不读标签周
+
+
+def test_history_features_fail_when_future_rows_are_passed_as_history() -> None:  # 传 future 必须失败
+    as_of = float(_unix("2020-09-09"))  # 验证周开始
+    df = pd.DataFrame(  # 历史 + 标签周
+        {  # 列
+            "user_id:token": ["u1", "u1"],  # 同一用户
+            "item_id:token": ["hist", "label_only"],  # 历史与未来
+            "timestamp:float": [_unix("2020-09-01"), _unix("2020-09-09")],  # 时间
+        }  # 列结束
+    )  # 表结束
+    with pytest.raises(AssertionError, match="future"):  # 硬失败
+        assert_history_has_no_future(df, as_of)  # 混入标签周
+    with pytest.raises(AssertionError, match="future"):  # 特征入口同样失败
+        item_popularity_as_of(df, as_of, strict=True)  # 不得静默丢掉
+    with pytest.raises(AssertionError, match="future"):  # 用户偏好
+        user_item_counts_as_of(df, as_of, strict=True)  # 不得静默丢掉
+    hist = filter_interactions_as_of(df, as_of)  # 先截断
+    assert_history_has_no_future(hist, as_of)  # 截断后应通过
+    assert item_popularity_as_of(hist, as_of, strict=True) == {"hist": 1}  # 只剩历史
 
 
 def test_optional_item_sampling_is_fitted_on_train_only() -> None:

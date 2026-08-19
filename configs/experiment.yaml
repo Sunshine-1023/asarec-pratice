@@ -1,29 +1,45 @@
 # 统一实验协议。改算法时只应改这里写明的字段，而不是各脚本各写一套。
-# 下列默认值对应当前主链路，作为之后所有优化的对照协议。
+# 下列默认值对应下一阶段数据语义：26 周历史、next-basket、全量商品、候选并集 500。
+# 旧 YAML 缺少新字段时，加载器会填入与本文件一致的默认值。
 
 experiment:
   name: fashionrec_v3
   seed: 2026
 
 data:
-  history_weeks: 4
+  history_weeks: 26
   valid_weeks: 1
   test_weeks: 1
   backtest_windows: 3
-  max_user_history: 100
+  snapshot_frequency: weekly
+  max_user_history: 200
   min_user_purchases: 5
+  keep_full_item_universe: true
+  deduplicate_user_day_item: true
+
+label:
+  horizon_days: 7
+  target_mode: next_basket
+  include_repeat_label: true
+  include_new_to_user_label: true
 
 model_selection:
   checkpoint_shortlist_size: 5
 
 candidate:
-  per_channel_top_k: 100
-  popular_top_k: 50
-  category_popular_top_k: 50
-  item2item_top_k: 50
-  sequence_top_k: 100
-  union_top_k: 300
+  per_channel_top_k: 200
+  popular_top_k: 200
+  category_popular_top_k: 200
+  item2item_top_k: 200
+  sequence_top_k: 200
+  union_top_k: 500
   final_top_k: 12
+
+ranking:
+  enabled: false
+  library: lightgbm
+  objective: lambdarank
+  top_k_for_training: 500
 
 evaluation:
   primary_metric: MAP@12

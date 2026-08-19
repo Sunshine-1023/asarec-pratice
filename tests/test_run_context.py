@@ -30,4 +30,8 @@ def test_create_run_context_freezes_resolved_config(tmp_path: Path) -> None:  # 
     assert payload["strict"] is True  # 模式
     assert len(payload["config_sha256"]) == 64  # SHA256
     assert context.artifacts.candidates.is_dir()  # 目录齐全
+    assert context.artifacts.data.is_dir()  # 处理后数据隔离到本次 run
+    assert payload["data"]["history_weeks"] == 26  # 冻结 26 周协议
+    assert payload["label"]["target_mode"] == "next_basket"  # 标签协议写入快照
+    assert payload["ranking"]["enabled"] is False  # 学习排序默认关闭
 

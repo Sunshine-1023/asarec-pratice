@@ -12,6 +12,7 @@ from typing import Any, Iterable  # 类型注解
 
 
 CHUNK_SIZE = 1024 * 1024  # 流式哈希分块大小（1MB）
+SCHEMA_VERSION = "hm.row.inter.v1"  # 当前仍是行级交互；购物篮语义变更时升级此版本
 INTER_USER_COL = "user_id:token"  # RecBole 交互用户列
 INTER_ITEM_COL = "item_id:token"  # RecBole 交互商品列
 INTER_TIME_COL = "timestamp:float"  # RecBole 交互时间戳列
@@ -100,6 +101,20 @@ def describe_file(path: Path, collect_inter_stats: bool = False) -> dict[str, An
     return info  # 返回文件描述
 
 
+def dataset_version(  # 由协议参数生成短版本号
+    preprocess: dict[str, Any] | None,
+    split_bounds: dict[str, Any] | None = None,
+    schema_version: str = SCHEMA_VERSION,
+) -> str:
+    payload = {  # 只对可复现字段求哈希
+        "schema_version": schema_version,  # schema
+        "preprocess": preprocess or {},  # 预处理
+        "split_bounds": split_bounds or {},  # 窗口边界
+    }  # 载荷结束
+    encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")  # 稳定序列化
+    return hashlib.sha256(encoded).hexdigest()[:12]  # 短版本
+
+
 def build_manifest(  # 组装实验数据清单
     files: dict[str, Path],  # 逻辑名到路径
     inter_files: Iterable[str] | None = None,  # 需要对交互做统计的逻辑名
@@ -107,17 +122,23 @@ def build_manifest(  # 组装实验数据清单
     preprocess: dict[str, Any] | None = None,  # 预处理参数
     repo_root: Path | None = None,  # Git 仓库根目录
     generated_at: str | None = None,  # 可注入生成时间以便测试
+    schema_version: str = SCHEMA_VERSION,  # 数据语义版本
+    raw_transactions: Path | None = None,  # 真正的 raw 输入，与 filtered 区分
 ) -> dict[str, Any]:  # 返回清单字典
     inter_names = set(inter_files or ())  # 需要统计的交互文件名
     file_payload = {  # 逐文件描述
         name: describe_file(path, collect_inter_stats=name in inter_names)  # 交互文件额外统计
         for name, path in files.items()  # 遍历全部文件
     }  # 文件描述结束
+    raw_info = describe_file(raw_transactions) if raw_transactions is not None else None  # raw 单独快照
     return {  # 完整清单
         "generated_at": generated_at or datetime.now(timezone.utc).isoformat(),  # 生成时间
         "git_sha": read_git_sha(repo_root),  # 只读 Git SHA
+        "schema_version": schema_version,  # 语义版本
+        "dataset_version": dataset_version(preprocess, split_bounds, schema_version),  # 协议短版本
         "preprocess": preprocess or {},  # 预处理参数
         "split_bounds": split_bounds or {},  # 时间切分边界
+        "raw_transactions": raw_info,  # 原始交易快照，避免和 filtered 混用
         "files": file_payload,  # 各文件快照
     }  # 清单结束
 
@@ -136,16 +157,18 @@ def write_manifest(payload: dict[str, Any], output_path: Path) -> Path:  # 将�
 
 
 def build_processed_hm_manifest(  # 针对当前 hm 处理后数据生成清单
-    processed_dir: Path | None = None,  # data/processed 目录
-    raw_transactions: Path | None = None,  # 原始或过滤后交易文件
+    processed_dir: Path | None = None,  # 处理后数据目录，默认全局 data/processed
+    raw_transactions: Path | None = None,  # 本次实际喂给 preprocess 的交易文件（raw 或本 run 的 filtered）
+    true_raw_transactions: Path | None = None,  # 始终指向原始 transactions_train.csv
     preprocess: dict[str, Any] | None = None,  # 预处理参数
     split_bounds: dict[str, Any] | None = None,  # 切分边界
     repo_root: Path | None = None,  # 仓库根
 ) -> dict[str, Any]:  # 返回清单
     processed_dir = processed_dir or Path("data/processed")  # 默认处理后目录
     hm_dir = processed_dir / "hm"  # hm 交互目录
+    true_raw = true_raw_transactions or Path("data/raw/transactions_train.csv")  # 真正 raw
     files = {  # 需要纳入快照的文件
-        "raw_or_filtered_transactions": raw_transactions or Path("data/raw/filtered/transactions_train.csv"),  # 输入交易
+        "run_transactions_input": raw_transactions or true_raw,  # 本次实际输入
         "hm.inter": hm_dir / "hm.inter",  # 全量交互
         "hm.train.inter": hm_dir / "hm.train.inter",  # 训练集
         "hm.model_train.inter": hm_dir / "hm.model_train.inter",  # 模型拟合子集
@@ -159,4 +182,5 @@ def build_processed_hm_manifest(  # 针对当前 hm 处理后数据生成清单
         split_bounds=split_bounds,  # 时间边界
         preprocess=preprocess,  # 预处理参数
         repo_root=repo_root,  # 仓库根
+        raw_transactions=true_raw,  # 原始交易单独记录
     )  # 清单组装结束

@@ -97,6 +97,7 @@ test:
 check: test
 	$(CLI) --help >/dev/null
 	$(CLI) data --help >/dev/null
+	$(CLI) profile-data --help >/dev/null
 	$(CLI) train --help >/dev/null
 	$(CLI) select-checkpoint --help >/dev/null
 	$(CLI) recall --help >/dev/null

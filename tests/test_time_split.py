@@ -2,6 +2,7 @@
 
 from __future__ import annotations  # 延迟注解
 
+from dataclasses import replace  # 破坏边界以断言校验
 from pathlib import Path  # 路径
 
 import pandas as pd  # 读写切分结果
@@ -10,6 +11,7 @@ import pytest  # 断言
 from fashionrec.data.split import (  # 切分
     INTERACTION_SORT_COLUMNS,  # 排序键
     build_model_train_split,
+    compute_split_bounds,  # 边界公式
     history_paths_for_eval,  # 历史路径
     sort_interactions,  # 确定性排序
     split_by_time,  # 切分
@@ -58,6 +60,42 @@ def test_split_timestamps_are_strictly_increasing(tmp_path: Path) -> None:  # ma
     assert float(valid["timestamp:float"].max()) < float(test["timestamp:float"].min())  # 验证 < 测试
     assert str(result.valid_start.date()) == "2020-09-09"  # 验证起
     assert str(result.test_start.date()) == "2020-09-16"  # 测试起
+    assert result.bounds == compute_split_bounds(  # 抽出的边界与公式一致
+        result.max_date,  # 文件最大日
+        train_weeks=4,  # 默认训练周
+        valid_weeks=1,  # 验证
+        test_weeks=1,  # 测试
+    )  # 边界结束
+
+
+def test_split_by_time_uses_explicit_bounds_instead_of_file_max(tmp_path: Path) -> None:  # 回测窗口 1
+    source = tmp_path / "hm.inter"  # 输入仍含官方最后一周
+    _write_inter(source, _six_week_rows())  # 6 周样本
+    bounds = compute_split_bounds(  # 锚点回移一周
+        pd.Timestamp("2020-09-15"),  # 官方 valid 最后一天
+        train_weeks=4,  # 训练
+        valid_weeks=1,  # 验证
+        test_weeks=1,  # 测试
+    )  # 边界
+    result = split_by_time(  # 显式窗口
+        inter_path=source,  # 同一文件
+        train_inter_path=tmp_path / "w1_train.inter",  # 训练
+        valid_inter_path=tmp_path / "w1_valid.inter",  # 验证
+        test_inter_path=tmp_path / "w1_test.inter",  # 测试
+        bounds=bounds,  # 不用文件 max_date
+    )  # 切分结束
+    test = pd.read_csv(result.test_path, sep="\t")  # 该窗口 test
+    assert str(result.test_end.date()) == "2020-09-15"  # 不是 09-22
+    assert float(test["timestamp:float"].max()) < float(_unix("2020-09-16"))  # 看不到官方 test
+    bad = replace(bounds, valid_start=bounds.valid_start - pd.Timedelta(days=1))  # 与周数不符
+    with pytest.raises(ValueError, match="bounds"):  # 必须拒绝
+        split_by_time(  # 错误边界
+            inter_path=source,  # 输入
+            train_inter_path=tmp_path / "bad_train.inter",  # 训练
+            valid_inter_path=tmp_path / "bad_valid.inter",  # 验证
+            test_inter_path=tmp_path / "bad_test.inter",  # 测试
+            bounds=bad,  # 非法
+        )  # 应失败
 
 
 def test_same_timestamp_order_is_deterministic(tmp_path: Path) -> None:  # 同一时间戳不依赖原始行序

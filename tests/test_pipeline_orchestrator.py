@@ -22,7 +22,14 @@ def test_pipeline_steps_share_one_run_artifact_tree(tmp_path: Path) -> None:
     assert any("--final-top-k 12" in command for command in commands)
     configured_commands = [command for command in commands if " fashionrec candidates " in command or " fashionrec weights " in command or " fashionrec evaluate " in command]
     assert configured_commands
-    assert all("--max-user-history 100" in command for command in configured_commands)
+    assert all("--max-user-history 200" in command for command in configured_commands)
+    data_command = next(command for command in commands if " fashionrec data " in command)
+    assert f"--processed-dir {tmp_path / 'run-1' / 'data'}" in data_command
+    assert "--with-filter" not in data_command
+    assert "--build-events" not in data_command
+    assert "--build-baskets" not in data_command
+    assert "--build-labels" not in data_command
+    assert "--build-backtest" not in data_command
     selection_index = next(index for index, step in enumerate(steps) if "MAP" in step.name)
     valid_recall_index = next(index for index, step in enumerate(steps) if step.name == "SASRecF 召回 valid")
     assert selection_index < valid_recall_index
@@ -34,6 +41,43 @@ def test_pipeline_steps_share_one_run_artifact_tree(tmp_path: Path) -> None:
     assert len(eval_commands) == 2
     assert all(f"--weights-json {weights_path}" in command for command in eval_commands)
     assert all("outputs/recommendations" not in command for command in commands)
+
+
+def test_pipeline_backtest_flag_does_not_train_three_models(tmp_path: Path) -> None:
+    context = create_run_context(
+        "configs/experiment.yaml",
+        output_root=tmp_path,
+        run_id="run-bt",
+        strict=True,
+    )
+    steps = build_pipeline_steps(
+        context,
+        python_executable="python",
+        options=PipelineOptions(build_backtest=True),
+    )
+    train_steps = [step for step in steps if step.name == "训练 SASRecF"]
+    assert len(train_steps) == 1
+    data_command = next(" ".join(step.command) for step in steps if " fashionrec data " in " ".join(step.command))
+    assert "--build-backtest" in data_command
+    assert steps[-1].name == "离线排序评估 test"
+
+
+def test_pipeline_with_filter_still_writes_into_run_data_dir(tmp_path: Path) -> None:
+    context = create_run_context(
+        "configs/experiment.yaml",
+        output_root=tmp_path,
+        run_id="run-filter",
+        strict=True,
+    )
+    steps = build_pipeline_steps(
+        context,
+        python_executable="python",
+        options=PipelineOptions(with_filter=True, skip_train=True, skip_checkpoint_selection=True, skip_recall=True, skip_candidates=True, skip_weight_search=True, skip_valid_eval=True, skip_test_eval=True),
+    )
+    command = " ".join(steps[0].command)
+    assert steps[0].name == "数据准备"
+    assert "--with-filter" in command
+    assert f"--processed-dir {tmp_path / 'run-filter' / 'data'}" in command
 
 
 def test_pipeline_can_plan_read_only_smoke_with_all_mutating_stages_skipped(tmp_path: Path) -> None:

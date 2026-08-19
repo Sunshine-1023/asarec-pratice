@@ -19,6 +19,10 @@ class RunArtifacts:  # 一次实验的全部产物目录
         return cls(run_id=clean_run_id, root=Path(output_root) / clean_run_id)  # 返回路径集合
 
     @property
+    def data(self) -> Path:  # 本次运行的处理后数据，避免覆盖全局 data/processed
+        return self.root / "data"  # 目录
+
+    @property
     def manifest(self) -> Path:  # 运行 manifest
         return self.root / "manifest.json"  # 文件路径
 
@@ -53,6 +57,7 @@ class RunArtifacts:  # 一次实验的全部产物目录
     def ensure_directories(self) -> None:  # 显式创建所有运行目录
         for path in (  # 遍历目录
             self.root,  # 根目录
+            self.data,  # 处理后数据
             self.checkpoints,  # checkpoint
             self.recall,  # recall
             self.candidates,  # candidates

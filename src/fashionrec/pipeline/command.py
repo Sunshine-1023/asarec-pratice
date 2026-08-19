@@ -34,6 +34,11 @@ def main(argv: list[str] | None = None) -> None:  # 命令行入口：组装并�
         action="store_true",  # 布尔开关
         help="Apply train-fitted item filtering during data preparation",  # 帮助文本
     )  # --with-filter 参数结束
+    parser.add_argument(  # 透传到 data；默认关，只写窗口切分，不训练三遍 SASRecF
+        "--build-backtest",
+        action="store_true",
+        help="Write rolling backtest splits during data prep; official test remains window 0 only.",
+    )
     parser.add_argument("--skip-data-prep", action="store_true", help="Skip step 1")  # 跳过步骤 1 数据准备
     parser.add_argument("--skip-train", action="store_true", help="Skip step 2 (SASRecF training)")  # 跳过步骤 2 SASRecF 训练
     parser.add_argument(
@@ -89,6 +94,7 @@ def main(argv: list[str] | None = None) -> None:  # 命令行入口：组装并�
         skip_valid_eval=args.skip_valid_eval,
         skip_test_eval=args.skip_test_eval,
         weights_json=str(args.weights_json) if args.weights_json is not None else None,
+        build_backtest=args.build_backtest,
     )
     steps = build_pipeline_steps(context, python_executable=sys.executable, options=options)
 

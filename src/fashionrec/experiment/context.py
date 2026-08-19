@@ -37,7 +37,7 @@ class RunContext:  # 一次正式流水线的共享上下文
         payload["run_id"] = self.run_id  # 运行 ID
         payload["strict"] = self.strict  # 严格模式
         payload["config_sha256"] = self.config_sha256  # 配置哈希
-        return payload  # 返回载荷
+        return json.loads(json.dumps(payload, default=str))  # 元组等转为 JSON 可写类型
 
     def initialize(self) -> None:  # 创建目录并冻结配置
         self.artifacts.ensure_directories()  # 创建目录

@@ -12,7 +12,7 @@ from fashionrec.data.time import week_window_start
 
 
 RAW_DIR = Path("data/raw")  # 原始数据目录
-FILTERED_RAW_PATH = RAW_DIR / "filtered/transactions_train.csv"  # 过滤后交易文件路径
+FILTERED_RAW_PATH = RAW_DIR / "filtered/transactions_train.csv"  # 历史全局 filtered；新 run 禁止静默复用此路径
 RAW_PATH = RAW_DIR / "transactions_train.csv"  # 未过滤交易文件路径
 PROCESSED_DIR = Path("data/processed")  # 处理后数据目录
 DATASET_DIR = PROCESSED_DIR / "hm"  # hm 数据集子目录
@@ -46,7 +46,8 @@ def load_transactions(  # 加载并预处理交易为 RecBole 列格式
     df = df[df["t_dat"].dt.normalize() >= min_date]  # 保留最近 weeks 周
 
     # 不在切分前用未来总购买次数筛用户，也不提前删除历史。  # valid/test 不得改变训练数据
-    df = df.sort_values(["customer_id", "t_dat", "article_id"], kind="mergesort")  # 稳定时间顺序
+    # 同日商品不是序列：只按用户与日期排序，禁止用 article_id 制造日内先后。
+    df = df.sort_values(["customer_id", "t_dat"], kind="mergesort")  # 稳定到天，日内保持文件出现顺序
 
     df["timestamp"] = (df["t_dat"] - pd.Timestamp("1970-01-01")) // pd.Timedelta(seconds=1)  # 转为 Unix 秒时间戳
 

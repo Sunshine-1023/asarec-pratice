@@ -16,6 +16,11 @@ def test_root_has_no_python_startup_scripts() -> None:  # 根目录不再暴露�
     assert list(ROOT.glob("run_*.py")) == []  # 所有 Python 命令必须位于正式包内
 
 
+def test_cli_exposes_profile_data_command() -> None:  # raw 体检必须走统一 CLI
+    assert "profile-data" in cli.COMMANDS  # 命令表含 profile-data
+    assert cli.COMMANDS["profile-data"].module == "fashionrec.data.profile"  # 指向流式 profile 模块
+
+
 def test_pyproject_registers_one_console_script() -> None:  # 校验安装后的公开命令
     payload = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))  # 读取元数据
     assert payload["project"]["scripts"] == {"fashionrec": "fashionrec.cli:main"}  # 仅暴露一个脚本

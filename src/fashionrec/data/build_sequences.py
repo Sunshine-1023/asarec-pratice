@@ -1,4 +1,4 @@
-"""Build causal RecBole sequence samples from time-based interaction splits."""  # 序列样本属于数据层，不依赖训练入口
+"""Build causal RecBole sequence samples from time-based interaction splits."""  # 序列样本按购物日推进，同日目标共享历史
 
 from __future__ import annotations  # 延迟注解
 
@@ -8,6 +8,7 @@ from pathlib import Path  # 路径
 
 import pandas as pd  # 读取和排序交互
 
+from fashionrec.data.build_baskets import flatten_recent_baskets  # 按完整购物日截断历史
 from fashionrec.domain.ids import canonical_item_id, canonical_user_id  # 统一 ID 契约
 
 
@@ -22,29 +23,43 @@ RECB_VALID_FILE = TARGET_DIR / "hm_seq.valid.inter"  # RecBole 验证文件
 RECB_TEST_FILE = TARGET_DIR / "hm_seq.test.inter"  # RecBole 测试文件
 
 
-def load_history_map(path: Path) -> dict[str, list[str]]:  # 从完整历史文件构建用户序列
-    frame = pd.read_csv(
+BasketHistory = dict[str, list[list[str]]]  # 用户 -> 从旧到新的购物日商品集合
+
+
+def _add_date_column(frame: pd.DataFrame) -> pd.DataFrame:  # 时间戳落到日历日，同日不同秒仍同一篮
+    out = frame.copy()  # 拷贝
+    out["user_id:token"] = out["user_id:token"].map(canonical_user_id)  # 用户
+    out["item_id:token"] = out["item_id:token"].map(canonical_item_id)  # 商品
+    out["date"] = pd.to_datetime(out["timestamp:float"], unit="s").dt.normalize()  # 自然日
+    out = out.drop_duplicates(["user_id:token", "date", "item_id:token"], keep="first")  # 同日同 SKU 只留一件
+    return out  # 返回
+
+
+def load_history_map(path: Path) -> BasketHistory:  # 从完整历史文件构建按日购物篮历史
+    frame = pd.read_csv(  # 读交互
         path,
         sep="\t",
         usecols=["user_id:token", "item_id:token", "timestamp:float"],
         dtype={"user_id:token": "string", "item_id:token": "string"},
     )
-    frame["user_id:token"] = frame["user_id:token"].map(canonical_user_id)
-    frame["item_id:token"] = frame["item_id:token"].map(canonical_item_id)
-    frame = frame.sort_values(["user_id:token", "timestamp:float", "item_id:token"], kind="mergesort")
-    history: dict[str, list[str]] = defaultdict(list)
-    for user_id, item_id in frame[["user_id:token", "item_id:token"]].itertuples(index=False, name=None):
-        history[user_id].append(item_id)
-    return history
+    frame = _add_date_column(frame)  # 规范化并去重
+    history: BasketHistory = defaultdict(list)  # 用户购物日
+    for user_id in sorted(frame["user_id:token"].unique()):  # 用户顺序稳定
+        user_df = frame[frame["user_id:token"] == user_id]  # 该用户
+        for _date, day_df in user_df.groupby("date", sort=True):  # 按日从旧到新
+            items = sorted(day_df["item_id:token"].unique())  # 日内无先后，排序只为可复现
+            history[user_id].append(items)  # 追加完整一天
+    return history  # 返回
 
 
-def convert_to_sequence_samples(  # 将一个划分转换为因果序列样本
+def convert_to_sequence_samples(  # 将一个划分转换为按日因果序列样本
     source_path: Path,  # 源交互文件
     target_path: Path,  # 输出序列文件
-    history_map: dict[str, list[str]],  # 预测时刻之前的用户历史
-    max_item_list_length: int,  # 最大序列长度
-    rolling_within_split: bool,  # 当前划分内是否逐行推进历史
-    advance_history_after_split: bool,  # 当前划分结束后是否批量推进历史
+    history_map: BasketHistory,  # 预测日之前的用户购物篮
+    max_item_list_length: int,  # 最大展平序列长度
+    rolling_within_split: bool,  # 当前划分内是否按购物日推进历史
+    advance_history_after_split: bool,  # 当前划分结束后是否批量并入后续历史
+    max_shopping_days: int | None = None,  # 最多保留最近 N 个购物日
 ) -> int:  # 写入样本数
     if max_item_list_length < 1:  # 无效序列长度
         raise ValueError("max_item_list_length must be >= 1")  # 尽早失败
@@ -54,13 +69,11 @@ def convert_to_sequence_samples(  # 将一个划分转换为因果序列样本
         usecols=["user_id:token", "item_id:token", "timestamp:float"],
         dtype={"user_id:token": "string", "item_id:token": "string"},
     )
-    df["user_id:token"] = df["user_id:token"].map(canonical_user_id)  # 统一用户 ID
-    df["item_id:token"] = df["item_id:token"].map(canonical_item_id)  # 统一商品 ID
-    df = df.sort_values(["user_id:token", "timestamp:float", "item_id:token"], kind="mergesort")  # 稳定因果顺序
+    df = _add_date_column(df)  # 按日历日成篮，去掉同日同 SKU 重复
 
     target_path.parent.mkdir(parents=True, exist_ok=True)  # 输出目录
     rows_written = 0  # 样本计数
-    split_items_by_user: dict[str, list[str]] = defaultdict(list)  # 划分结束后再追加的物品
+    split_baskets_by_user: dict[str, list[list[str]]] = defaultdict(list)  # 划分结束后再追加的购物日
     with target_path.open("w", newline="", encoding="utf-8") as handle:  # 写出 TSV
         writer = csv.writer(handle, delimiter="\t")  # TSV writer
         writer.writerow(  # RecBole 序列 schema
@@ -72,20 +85,30 @@ def convert_to_sequence_samples(  # 将一个划分转换为因果序列样本
                 "timestamp:float",
             ]
         )
-        for user_id, item_id, timestamp in df.itertuples(index=False, name=None):  # 逐交互转换
-            history = history_map[user_id]  # 当前用户已有历史
-            if history:  # 首条行为没有可用历史，不生成样本
-                sequence = history[-max_item_list_length:]  # 截断最近历史
-                writer.writerow([user_id, " ".join(sequence), len(sequence), item_id, timestamp])  # 写样本
-                rows_written += 1  # 计数
-            if rolling_within_split:  # 训练集按交互滚动
-                history.append(item_id)
-            elif advance_history_after_split:  # valid 完成后供 test 使用，但 valid 内互不泄漏
-                split_items_by_user[user_id].append(item_id)
+        for user_id in sorted(df["user_id:token"].unique()):  # 用户稳定顺序
+            user_df = df[df["user_id:token"] == user_id]  # 该用户
+            for _date, day_df in user_df.groupby("date", sort=True):  # 按购物日推进
+                items = sorted(day_df["item_id:token"].unique())  # 当日目标集合
+                timestamp = float(day_df["timestamp:float"].min())  # 当日时间戳，同日样本共用
+                flattened = flatten_recent_baskets(  # 只用这一天之前的完整购物日
+                    history_map[user_id],  # 已完成的历史篮
+                    max_item_list_length=max_item_list_length,  # 展平上限
+                    max_shopping_days=max_shopping_days,  # 购物日上限
+                )
+                if flattened:  # 没有历史的首个购物日不生成样本
+                    sequence = " ".join(flattened)  # 同日所有目标共享这份历史
+                    length = len(flattened)  # 长度
+                    for item_id in items:  # 每个目标一行，历史完全相同
+                        writer.writerow([user_id, sequence, length, item_id, timestamp])  # 写样本
+                        rows_written += 1  # 计数
+                if rolling_within_split:  # 训练集：过完这一天，下一日才看得到 A/B/C
+                    history_map[user_id].append(list(items))  # 追加完整一天
+                elif advance_history_after_split:  # valid：周内不推进，整周结束后给 test
+                    split_baskets_by_user[user_id].append(list(items))  # 记下当日篮子
 
     if advance_history_after_split:  # 批量推进历史
-        for user_id, items in split_items_by_user.items():
-            history_map[user_id].extend(items)
+        for user_id, days in split_baskets_by_user.items():  # 按日追加，不把整周揉成假序列
+            history_map[user_id].extend(days)  # 并入后续划分
     return rows_written  # 返回样本数
 
 
@@ -96,6 +119,7 @@ def prepare_recbole_benchmark_files(  # 构建 train/valid/test 三个序列文�
     test_split_file: Path = TEST_SPLIT_FILE,
     target_dir: Path = TARGET_DIR,
     train_history_file: Path | None = None,  # 自定义 fixture 默认复用 train_split
+    max_shopping_days: int | None = None,  # 最近 N 个购物日；默认只按展平长度截断
 ) -> tuple[Path, Path, Path]:
     """Build benchmark files without importing or initializing RecBole."""  # 纯数据准备边界
     resolved_train_history = (
@@ -114,17 +138,35 @@ def prepare_recbole_benchmark_files(  # 构建 train/valid/test 三个序列文�
         target_dir / "hm_seq.test.inter",
     )
     target_dir.mkdir(parents=True, exist_ok=True)  # 创建输出目录
-    history_map: dict[str, list[str]] = defaultdict(list)  # 跨划分历史
+    history_map: BasketHistory = defaultdict(list)  # 跨划分按日历史
 
-    train_rows = convert_to_sequence_samples(  # train 内滚动
-        sources[0], targets[0], history_map, max_item_list_length, True, False
+    train_rows = convert_to_sequence_samples(  # train 内按购物日滚动
+        sources[0],
+        targets[0],
+        history_map,
+        max_item_list_length,
+        True,
+        False,
+        max_shopping_days,
     )
     history_map = defaultdict(list, load_history_map(resolved_train_history))  # valid 使用完整 train 历史
-    valid_rows = convert_to_sequence_samples(  # valid 内不滚动，结束后纳入 test 历史
-        sources[1], targets[1], history_map, max_item_list_length, False, True
+    valid_rows = convert_to_sequence_samples(  # valid 周内不滚动，结束后纳入 test 历史
+        sources[1],
+        targets[1],
+        history_map,
+        max_item_list_length,
+        False,
+        True,
+        max_shopping_days,
     )
     test_rows = convert_to_sequence_samples(  # test 只消费历史，不推进
-        sources[2], targets[2], history_map, max_item_list_length, False, False
+        sources[2],
+        targets[2],
+        history_map,
+        max_item_list_length,
+        False,
+        False,
+        max_shopping_days,
     )
 
     for label, path, rows in zip(("train", "valid", "test"), targets, (train_rows, valid_rows, test_rows)):
