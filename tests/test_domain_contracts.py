@@ -41,4 +41,6 @@ def test_candidate_normalizes_ids_and_validates_rank() -> None:  # 候选构造�
     }  # 字典结束
     with pytest.raises(ValueError, match="rank"):  # 非法排名
         Candidate("u", "1", "popular", 1.0, 0, "valid")  # rank=0
+    train = Candidate("u", "1", "popular", 1.0, 1, "train")  # 排序训练快照
+    assert train.split == "train"
 

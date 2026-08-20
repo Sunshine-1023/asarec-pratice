@@ -49,6 +49,7 @@ def main(argv: list[str] | None = None) -> None:  # 命令行入口：组装并�
     parser.add_argument("--skip-recall", action="store_true", help="Skip step 3 (SASRecF recall export)")  # 跳过步骤 3 召回导出
     parser.add_argument("--skip-candidates", action="store_true", help="Skip four-channel candidate materialization")
     parser.add_argument("--skip-weight-search", action="store_true", help="Skip step 5")  # 跳过步骤 5 权重搜索
+    parser.add_argument("--skip-ranker", action="store_true", help="Skip LightGBM LambdaRank train/predict")
     parser.add_argument(  # 定义 --skip-valid-eval 参数
         "--skip-valid-eval",  # 参数名
         action="store_true",  # 布尔开关
@@ -91,6 +92,7 @@ def main(argv: list[str] | None = None) -> None:  # 命令行入口：组装并�
         skip_recall=args.skip_recall,
         skip_candidates=args.skip_candidates,
         skip_weight_search=args.skip_weight_search,
+        skip_ranker=args.skip_ranker,
         skip_valid_eval=args.skip_valid_eval,
         skip_test_eval=args.skip_test_eval,
         weights_json=str(args.weights_json) if args.weights_json is not None else None,

@@ -73,6 +73,15 @@ class RunArtifacts:  # 一次实验的全部产物目录
     def candidate_file(self, split: str, suffix: str = ".csv") -> Path:  # 候选并集文件
         return self.candidates / f"{str(split).strip().lower()}{suffix}"  # 路径
 
+    def ranking_table_file(self, split: str) -> Path:  # LambdaRank 训练/推理表
+        return self.ranking / f"{str(split).strip().lower()}.parquet"
+
+    def ranker_dir(self) -> Path:  # 学习排序 artifact
+        return self.ranking / "lambdarank"
+
+    def ranker_scored_file(self, split: str) -> Path:  # 打分后的候选
+        return self.ranking / f"{str(split).strip().lower()}_scored.csv"
+
     def metrics_file(self, split: str) -> Path:  # 指标文件
         return self.evaluation / f"{str(split).strip().lower()}_metrics.json"  # 路径
 

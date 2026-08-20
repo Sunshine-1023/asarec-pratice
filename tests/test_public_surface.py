@@ -21,6 +21,11 @@ def test_cli_exposes_profile_data_command() -> None:  # raw 体检必须走统�
     assert cli.COMMANDS["profile-data"].module == "fashionrec.data.profile"  # 指向流式 profile 模块
 
 
+def test_cli_exposes_ranker_commands() -> None:
+    assert cli.COMMANDS["ranker-train"].module == "fashionrec.ranking.train"
+    assert cli.COMMANDS["ranker-predict"].module == "fashionrec.ranking.predict"
+
+
 def test_pyproject_registers_one_console_script() -> None:  # 校验安装后的公开命令
     payload = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))  # 读取元数据
     assert payload["project"]["scripts"] == {"fashionrec": "fashionrec.cli:main"}  # 仅暴露一个脚本

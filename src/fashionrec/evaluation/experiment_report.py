@@ -8,8 +8,25 @@ from datetime import datetime, timezone  # 运行时间
 from pathlib import Path  # 路径
 from typing import Any, Iterable, Mapping, Sequence  # 类型
 
+from fashionrec.domain.ids import canonical_item_id, canonical_user_id  # 对照评估统一 ID
 from fashionrec.evaluation.metrics import hit_at_k, map_at_k, mean_metric, ndcg_at_k, recall_at_k  # 统一指标
 from fashionrec.experiment.config import REQUIRED_TIERS, classify_activity_tier  # 活跃度分层
+
+
+DEFAULT_ACTIVITY_TIERS: dict[str, tuple[int, int | None]] = {  # 与 configs/experiment.yaml 一致，供不加载 YAML 的 evaluate 使用
+    "cold_start": (0, 0),
+    "low": (1, 2),
+    "medium": (3, 9),
+    "high": (10, None),
+}
+RANKER_COMPARE_VARIANT_NAMES = (  # 阶段 4.3 固定对照名
+    "fusion_default_weights",
+    "fusion_valid_search_weights",
+    "lambdarank",
+    "lambdarank_rerank",
+)
+TIER_REGRESSION_TOLERANCE = 0.05  # 任一主要分层平均 MAP 相对下降超过 5% 即否决
+PRIMARY_GATE_METRIC_NAMES = ("MAP", "Recall", "NDCG")  # Hit 只报告，不进替换门闩
 
 
 def utc_run_id(prefix: str, now: datetime | None = None) -> str:  # 生成运行 ID
@@ -143,3 +160,182 @@ def save_candidate_diagnostics(  # 候选诊断 JSON + CSV
             ["channel", "k", "mean_exclusive_hit_rate", "mean_exclusive_hits", "n_users_with_hits"],
         ),
     }  # 返回
+
+
+def skipped_variant(name: str, reason: str) -> dict[str, Any]:  # 缺产物时占位，避免把跳过当成训练失败
+    return {"name": name, "overall": {"skipped": True, "reason": reason}, "per_tier": []}
+
+
+def score_named_variant(  # 对已有 pred 的用户列表计分并带上变体名
+    name: str,
+    users: Sequence[Mapping[str, Any]],
+    k: int,
+    activity_tiers: Mapping[str, tuple[int, int | None]],
+    extra: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"variant": name}
+    if extra:
+        payload.update(dict(extra))
+    overall, per_tier = score_users(users, k, activity_tiers, extra=payload)
+    return {"name": name, "overall": overall, "per_tier": per_tier}
+
+
+def load_ranked_predictions(path: str | Path, *, top_k: int) -> dict[str, list[str]]:  # 从 ranker-predict CSV 还原每用户 Top-K
+    if top_k < 1:
+        raise ValueError("top_k must be >= 1")
+    grouped: dict[str, list[tuple[int, str]]] = {}
+    with Path(path).open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None or "user_id" not in reader.fieldnames or "item_id" not in reader.fieldnames:
+            raise ValueError(f"ranked csv must contain user_id and item_id: {path}")
+        has_rank = "rank" in reader.fieldnames
+        for row in reader:
+            user_id = canonical_user_id(row["user_id"])
+            item_id = canonical_item_id(row["item_id"])
+            rank = int(float(row["rank"])) if has_rank and str(row.get("rank", "")).strip() else 10**9
+            grouped.setdefault(user_id, []).append((rank, item_id))
+    predictions: dict[str, list[str]] = {}
+    for user_id, rows in grouped.items():
+        rows.sort(key=lambda item: (item[0], item[1]))
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for _rank, item_id in rows:
+            if item_id in seen:
+                continue
+            seen.add(item_id)
+            ordered.append(item_id)
+            if len(ordered) >= top_k:
+                break
+        predictions[user_id] = ordered
+    return predictions
+
+
+def _variant_by_name(variants: Sequence[Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
+    indexed: dict[str, Mapping[str, Any]] = {}
+    for item in variants:
+        indexed[str(item["name"])] = item
+    return indexed
+
+
+def _is_skipped(variant: Mapping[str, Any] | None) -> bool:
+    if variant is None:
+        return True
+    overall = variant.get("overall") or {}
+    return bool(overall.get("skipped"))
+
+
+def _metric_keys(k: int) -> tuple[str, ...]:
+    return tuple(f"{name}@{k}" for name in PRIMARY_GATE_METRIC_NAMES)
+
+
+def _tier_map(per_tier: Sequence[Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
+    return {str(row["activity_tier"]): row for row in per_tier if "activity_tier" in row}
+
+
+def compare_ranker_variants(  # 判断 LambdaRank 是否可替换默认 RRF；只出建议，不改 pipeline
+    variants: Sequence[Mapping[str, Any]],
+    *,
+    k: int = 12,
+    baseline: str = "fusion_valid_search_weights",
+    candidate: str = "lambdarank",
+    fallback_baseline: str = "fusion_default_weights",
+    tier_regression_tolerance: float = TIER_REGRESSION_TOLERANCE,
+) -> dict[str, Any]:
+    indexed = _variant_by_name(variants)
+    gate_keys = _metric_keys(k)
+    candidate_variant = indexed.get(candidate)
+    baseline_name = baseline
+    baseline_variant = indexed.get(baseline)
+    if _is_skipped(baseline_variant):
+        baseline_name = fallback_baseline
+        baseline_variant = indexed.get(fallback_baseline)
+
+    payload: dict[str, Any] = {
+        "k": k,
+        "requested_baseline": baseline,
+        "effective_baseline": baseline_name,
+        "candidate": candidate,
+        "gate_metrics": list(gate_keys),
+        "tier_regression_tolerance": tier_regression_tolerance,
+        "variants": {item["name"]: item.get("overall", {}) for item in variants},
+        "deltas": {},
+        "improved_metrics": [],
+        "overall_improved": False,
+        "tier_regressions": [],
+        "major_tier_regression": False,
+        "replace_default_ranker": False,
+        "pipeline_default_unchanged": True,
+        "reason": "",
+    }
+
+    if _is_skipped(candidate_variant):
+        reason = "missing"
+        if candidate_variant is not None:
+            reason = str((candidate_variant.get("overall") or {}).get("reason") or "skipped")
+        payload["reason"] = f"{candidate} skipped: {reason}"
+        return payload
+    if _is_skipped(baseline_variant):
+        payload["reason"] = f"no usable RRF baseline ({baseline} and {fallback_baseline} skipped)"
+        return payload
+
+    assert candidate_variant is not None and baseline_variant is not None
+    candidate_overall = dict(candidate_variant["overall"])
+    baseline_overall = dict(baseline_variant["overall"])
+    deltas: dict[str, float] = {}
+    improved: list[str] = []
+    for key in (*gate_keys, f"Hit@{k}"):
+        if key not in candidate_overall or key not in baseline_overall:
+            continue
+        delta = float(candidate_overall[key]) - float(baseline_overall[key])
+        deltas[key] = delta
+        if key in gate_keys and delta > 0:
+            improved.append(key)
+    payload["deltas"] = deltas
+    payload["improved_metrics"] = improved
+    payload["overall_improved"] = bool(improved)
+
+    regressions: list[dict[str, Any]] = []
+    candidate_tiers = _tier_map(list(candidate_variant.get("per_tier") or []))
+    baseline_tiers = _tier_map(list(baseline_variant.get("per_tier") or []))
+    map_key = f"MAP@{k}"
+    for tier in REQUIRED_TIERS:
+        baseline_row = baseline_tiers.get(tier)
+        candidate_row = candidate_tiers.get(tier)
+        if baseline_row is None or candidate_row is None:
+            continue
+        if int(baseline_row.get("n_users") or 0) <= 0 or int(candidate_row.get("n_users") or 0) <= 0:
+            continue
+        baseline_map = float(baseline_row.get(map_key) or 0.0)
+        candidate_map = float(candidate_row.get(map_key) or 0.0)
+        if baseline_map <= 0:
+            continue
+        relative_drop = (baseline_map - candidate_map) / baseline_map
+        if relative_drop > tier_regression_tolerance:
+            regressions.append(
+                {
+                    "activity_tier": tier,
+                    "metric": map_key,
+                    "baseline": baseline_map,
+                    "candidate": candidate_map,
+                    "relative_drop": relative_drop,
+                }
+            )
+    payload["tier_regressions"] = regressions
+    payload["major_tier_regression"] = bool(regressions)
+    replace = payload["overall_improved"] and not payload["major_tier_regression"]
+    payload["replace_default_ranker"] = replace
+    if replace:
+        payload["reason"] = (
+            f"{candidate} improves {', '.join(improved)} vs {baseline_name} without MAP tier drop > "
+            f"{tier_regression_tolerance:.0%}; keep pipeline on RRF until ranking.enabled is flipped"
+        )
+    elif payload["major_tier_regression"]:
+        dropped = ", ".join(row["activity_tier"] for row in regressions)
+        payload["reason"] = f"{candidate} has major MAP regression on tiers: {dropped}"
+    else:
+        payload["reason"] = f"{candidate} does not improve MAP/Recall/NDCG@{k} vs {baseline_name}"
+    return payload
+
+
+def save_ranker_comparison(path: str | Path, payload: Mapping[str, Any]) -> Path:  # 写出对照与 gate
+    return write_json(Path(path), payload)

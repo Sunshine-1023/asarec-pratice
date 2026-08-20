@@ -39,6 +39,8 @@ COMMANDS: dict[str, CommandSpec] = {  # 统一公开命令表
         "Materialize rule and sequence candidates",  # 帮助说明
     ),  # 候选命令结束
     "weights": CommandSpec("fashionrec.evaluation.weight_search", "Search fusion weights on valid"),  # 搜权
+    "ranker-train": CommandSpec("fashionrec.ranking.train", "Train LightGBM LambdaRank"),  # 学习排序训练
+    "ranker-predict": CommandSpec("fashionrec.ranking.predict", "Score candidates with LambdaRank"),  # 学习排序推理
     "evaluate": CommandSpec("fashionrec.evaluation.offline_eval", "Evaluate fixed candidates and weights"),  # 评估
     "baseline": CommandSpec("fashionrec.evaluation.baseline_command", "Evaluate the current baseline"),  # 基线
 }  # 公开命令表结束

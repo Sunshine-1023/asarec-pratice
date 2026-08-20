@@ -46,6 +46,14 @@ from fashionrec.recall.item2item import (  # item2item 共现召回
     SEED_ITEMS,  # 种子商品数常量
     TOP_SIM_K,  # 每个商品保留相似邻居数
 )  # item2item 模块导入结束
+from fashionrec.evaluation.experiment_report import (  # 排序器对照报告
+    DEFAULT_ACTIVITY_TIERS,  # 与实验 YAML 一致的分层
+    compare_ranker_variants,  # gate
+    load_ranked_predictions,  # LambdaRank CSV
+    save_ranker_comparison,  # 落盘
+    score_named_variant,  # 计分
+    skipped_variant,  # 缺产物占位
+)
 from fashionrec.recall.popular import POPULAR_RECALL_TOP_K  # 导入热门召回 Top-K 常量
 from fashionrec.recall.generator import generate_candidates, read_candidate_csv  # 与规则导出共享候选生成器
 from fashionrec.recall.registry import PrecomputedChannel, build_rule_channel_registry  # 规则注册表与序列适配器
@@ -213,6 +221,139 @@ def build_fusion_eval_context(  # 构建融合评估上下文（召回只算一�
     )  # 上下文构建完成
 
 
+def _rrf_predictions(  # 同一候选集上跑 Weighted RRF
+    context: FusionEvalContext,
+    activity_weights: dict[ActivityTier, dict[str, float]],
+    exclude_seen: bool = False,
+) -> dict[str, list[str]]:
+    predictions: dict[str, list[str]] = {}
+    for row in context.users:
+        weights = get_channel_weights_for_user(
+            len(row["history"]),
+            context.sequence_channel,
+            activity_weights=activity_weights,
+        )
+        ranked = WeightedRRFRanker(weights, exclude_seen=exclude_seen).rank(
+            user_id=row["user_id"],
+            user_history=row["history_set"],
+            channel_candidates=row["channel_candidates"],
+            top_k=context.final_top_k,
+        )
+        predictions[row["user_id"]] = [item.item_id for item in ranked]
+    return predictions
+
+
+def _scoring_users(context: FusionEvalContext, predictions: dict[str, list[str]]) -> list[dict]:
+    return [
+        {
+            "user_id": row["user_id"],
+            "actual": row["actual_items"],
+            "pred": list(predictions.get(row["user_id"], [])),
+            "history_len": len(row["history"]),
+        }
+        for row in context.users
+    ]
+
+
+def collect_ranker_comparison_variants(  # 固定四组对照；缺产物 skip，不失败
+    context: FusionEvalContext,
+    *,
+    activity_tiers: dict[str, tuple[int, int | None]] | None = None,
+    searched_weights: dict[ActivityTier, dict[str, float]] | None = None,
+    ranker_predictions: dict[str, list[str]] | None = None,
+    rerank_predictions: dict[str, list[str]] | None = None,
+    exclude_seen: bool = False,
+    lambdarank_skip_reason: str = "no ranker scored csv",
+) -> list[dict]:
+    tiers = activity_tiers or DEFAULT_ACTIVITY_TIERS
+    k = context.final_top_k
+    variants: list[dict] = [
+        score_named_variant(
+            "fusion_default_weights",
+            _scoring_users(context, _rrf_predictions(context, ACTIVITY_WEIGHTS, exclude_seen)),
+            k,
+            tiers,
+            extra={"weights_source": "ACTIVITY_WEIGHTS"},
+        )
+    ]
+    if searched_weights is not None:
+        variants.append(
+            score_named_variant(
+                "fusion_valid_search_weights",
+                _scoring_users(context, _rrf_predictions(context, searched_weights, exclude_seen)),
+                k,
+                tiers,
+                extra={"weights_source": "weights_json"},
+            )
+        )
+    else:
+        variants.append(
+            skipped_variant(
+                "fusion_valid_search_weights",
+                "no frozen weights json; refusing to search on this split",
+            )
+        )
+    if ranker_predictions is not None:
+        variants.append(
+            score_named_variant(
+                "lambdarank",
+                _scoring_users(context, ranker_predictions),
+                k,
+                tiers,
+                extra={"ranker": "lightgbm_lambdarank"},
+            )
+        )
+    else:
+        variants.append(skipped_variant("lambdarank", lambdarank_skip_reason))
+    if rerank_predictions is not None:
+        variants.append(
+            score_named_variant(
+                "lambdarank_rerank",
+                _scoring_users(context, rerank_predictions),
+                k,
+                tiers,
+                extra={"ranker": "lightgbm_lambdarank_rerank"},
+            )
+        )
+    else:
+        variants.append(skipped_variant("lambdarank_rerank", "business rerank is stage 5; not implemented"))
+    return variants
+
+
+def write_ranker_comparison_report(  # 对照 + gate JSON
+    context: FusionEvalContext,
+    evaluation_dir: str | Path,
+    eval_split: str,
+    *,
+    activity_tiers: dict[str, tuple[int, int | None]] | None = None,
+    searched_weights: dict[ActivityTier, dict[str, float]] | None = None,
+    ranker_scored_csv: str | Path | None = None,
+    exclude_seen: bool = False,
+) -> tuple[Path, dict]:
+    ranker_predictions = None
+    skip_reason = "no ranker scored csv"
+    if ranker_scored_csv is not None:
+        scored_path = Path(ranker_scored_csv)
+        if scored_path.is_file():
+            ranker_predictions = load_ranked_predictions(scored_path, top_k=context.final_top_k)
+        else:
+            skip_reason = f"ranker scored csv not found: {scored_path}"
+    variants = collect_ranker_comparison_variants(
+        context,
+        activity_tiers=activity_tiers,
+        searched_weights=searched_weights,
+        ranker_predictions=ranker_predictions,
+        exclude_seen=exclude_seen,
+        lambdarank_skip_reason=skip_reason,
+    )
+    comparison = compare_ranker_variants(variants, k=context.final_top_k)
+    comparison["eval_split"] = eval_split
+    comparison["ranker_scored_csv"] = str(ranker_scored_csv) if ranker_scored_csv is not None else None
+    output_path = Path(evaluation_dir) / f"ranker_comparison_{eval_split}.json"
+    save_ranker_comparison(output_path, comparison)
+    return output_path, comparison
+
+
 def evaluate_fusion_map_at_k(  # 给定权重模板计算平均 MAP@K
     context: FusionEvalContext,  # 预计算的融合评估上下文
     activity_weights: dict[ActivityTier, dict[str, float]],  # 各分层通道权重模板
@@ -262,6 +403,8 @@ def evaluate_fusion(  # 执行多通道融合并评估
     candidate_csv: str | Path | None = None,  # 已物化候选输入
     max_user_history: int = 100,  # 用户分层与排除已购使用的历史上限
     data_dir: str | Path | None = None,  # processed dataset root
+    ranker_scored_csv: str | Path | None = None,  # 可选 LambdaRank 打分 CSV；缺文件则 skip
+    compare_rankers: bool = True,  # 写出 RRF vs LambdaRank 对照，不替换默认 RRF 输出
 ) -> tuple[Path, Path, dict[str, float]]:  # 返回推荐文件路径、指标文件路径与指标字典
     """Run multi-channel recall fusion and evaluate on valid/test split."""  # 在 valid/test 划分上运行多通道召回融合并评估
     if eval_split not in {"valid", "test"}:  # 校验评估划分参数
@@ -382,6 +525,20 @@ def evaluate_fusion(  # 执行多通道融合并评估
         "activity_tier_counts": dict(tier_counts) if adaptive_weights else {},  # 各分层用户数
         "eval_split": eval_split,  # 评估划分名称
     }  # 结束指标字典
+
+    if compare_rankers:  # 对照不改变 fusion_{split}.csv；gate 只写建议
+        comparison_path, comparison = write_ranker_comparison_report(
+            context,
+            resolved_evaluation_dir,
+            eval_split,
+            searched_weights=activity_weights,
+            ranker_scored_csv=ranker_scored_csv,
+            exclude_seen=exclude_seen,
+        )
+        metrics["ranker_comparison"] = str(comparison_path)
+        metrics["replace_default_ranker"] = bool(comparison.get("replace_default_ranker"))
+        print(f"Saved ranker comparison: {comparison_path}")
+
     metric_out.write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")  # 将指标写入 JSON 文件
 
     print(f"Saved fusion recommendations: {rec_out}")  # 打印推荐结果保存路径
@@ -450,6 +607,17 @@ def main(argv: list[str] | None = None) -> None:  # 命令行入口函数
         default=None,  # 默认不加载
         help="Load per-tier fusion weights from JSON (e.g. outputs/evaluation/best_fusion_weights.json)",  # 帮助文本
     )  # 权重 JSON 参数结束
+    parser.add_argument(  # LambdaRank 打分结果；缺文件时对照变体 skip
+        "--ranker-scored-csv",
+        type=Path,
+        default=None,
+        help="Optional LambdaRank scored csv from ranker-predict; missing file skips the variant",
+    )
+    parser.add_argument(  # 关闭对照报告
+        "--no-ranker-comparison",
+        action="store_true",
+        help="Skip RRF vs LambdaRank comparison report",
+    )
     args = parser.parse_args(argv)  # 解析显式命令参数
 
     loaded_weights = None  # 初始化加载的分层权重
@@ -488,6 +656,8 @@ def main(argv: list[str] | None = None) -> None:  # 命令行入口函数
         strict=args.strict,  # 严格依赖检查
         max_user_history=args.max_user_history,  # 统一历史上限
         data_dir=args.data_dir,
+        ranker_scored_csv=args.ranker_scored_csv,
+        compare_rankers=not args.no_ranker_comparison,
     )  # 结束评估调用
 
 

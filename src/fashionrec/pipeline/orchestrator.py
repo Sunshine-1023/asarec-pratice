@@ -23,6 +23,7 @@ class PipelineOptions:
     skip_recall: bool = False
     skip_candidates: bool = False
     skip_weight_search: bool = False
+    skip_ranker: bool = False
     skip_valid_eval: bool = False
     skip_test_eval: bool = False
     weights_json: str | None = None  # 跳过搜索时可复用显式指定权重
@@ -194,6 +195,48 @@ def build_pipeline_steps(
             )
         )
 
+    if cfg.ranking.enabled and not options.skip_ranker:
+        ranker_dir = artifacts.ranker_dir()
+        steps.append(
+            PipelineStep(
+                "训练 LightGBM LambdaRank",
+                _cli_command(
+                    python_executable,
+                    "ranker-train",
+                    "--train-parquet",
+                    str(artifacts.ranking_table_file("train")),
+                    "--valid-parquet",
+                    str(artifacts.ranking_table_file("valid")),
+                    "--output-dir",
+                    str(ranker_dir),
+                    "--n-estimators",
+                    "200",
+                    "--seed",
+                    str(cfg.experiment.seed),
+                ),
+            )
+        )
+        for split, skip in (("valid", options.skip_valid_eval), ("test", options.skip_test_eval)):
+            if skip:
+                continue
+            steps.append(
+                PipelineStep(
+                    f"LambdaRank 打分 {split}",
+                    _cli_command(
+                        python_executable,
+                        "ranker-predict",
+                        "--model-dir",
+                        str(ranker_dir),
+                        "--input-parquet",
+                        str(artifacts.ranking_table_file(split)),
+                        "--output-csv",
+                        str(artifacts.ranker_scored_file(split)),
+                        "--top-k",
+                        str(cfg.candidate.final_top_k),
+                    ),
+                )
+            )
+
     for split, skip in (("valid", options.skip_valid_eval), ("test", options.skip_test_eval)):
         if skip:
             continue
@@ -217,5 +260,7 @@ def build_pipeline_steps(
             *strict_args,
         ))
         command.extend(["--weights-json", str(weights_path)])
+        if cfg.ranking.enabled and not options.skip_ranker:
+            command.extend(["--ranker-scored-csv", str(artifacts.ranker_scored_file(split))])
         steps.append(PipelineStep(f"离线排序评估 {split}", tuple(command)))
     return steps

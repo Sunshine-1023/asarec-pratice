@@ -40,3 +40,18 @@ def test_lightgbm_feature_table_is_one_row_per_user_item_with_groups() -> None:
     assert first["label"] == 1
     assert lambda_rank_group_sizes(frame) == [2, 1]
 
+
+def test_ranking_features_attach_snapshot_and_group_id() -> None:
+    candidates = [
+        Candidate("u1", "1", "popular", 10, 1, "train"),
+        Candidate("u1", "2", "popular", 8, 2, "train"),
+    ]
+    frame = build_ranking_features(
+        candidates,
+        history_lengths={"u1": 3},
+        channels=["popular"],
+        snapshot_dates="2020-09-08",
+    )
+    assert list(frame["group_id"].unique()) == ["u1@2020-09-08"]
+    assert lambda_rank_group_sizes(frame) == [2]
+

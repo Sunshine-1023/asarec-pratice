@@ -27,8 +27,8 @@ class Candidate:  # 单个用户-商品候选
             raise ValueError("candidate channel must not be empty")  # 抛错
         if self.rank < 1:  # 排名从 1 开始
             raise ValueError(f"candidate rank must be >= 1, got {self.rank}")  # 抛错
-        if self.split not in {"valid", "test"}:  # 当前正式候选只允许两类
-            raise ValueError(f"candidate split must be valid or test, got {self.split!r}")  # 抛错
+        if self.split not in {"train", "valid", "test"}:  # 排序训练需要 train 快照候选
+            raise ValueError(f"candidate split must be train, valid or test, got {self.split!r}")  # 抛错
 
     def as_dict(self) -> dict[str, object]:  # 稳定的表格/JSON schema
         return {  # 返回字段

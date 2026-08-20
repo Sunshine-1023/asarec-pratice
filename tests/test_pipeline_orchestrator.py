@@ -118,6 +118,36 @@ def test_test_evaluation_is_the_final_pipeline_step(tmp_path: Path) -> None:
     assert all("fashionrec evaluate --eval-split test" not in command for command in earlier_commands)
 
 
+def test_pipeline_adds_ranker_steps_only_when_enabled(tmp_path: Path) -> None:
+    default_steps = build_pipeline_steps(
+        create_run_context("configs/experiment.yaml", output_root=tmp_path, run_id="rrf"),
+        python_executable="python",
+        options=PipelineOptions(),
+    )
+    assert all("LambdaRank" not in step.name for step in default_steps)
+
+    enabled = (tmp_path / "enabled.yaml")
+    enabled.write_text(Path("configs/experiment.yaml").read_text(encoding="utf-8").replace("enabled: false", "enabled: true", 1), encoding="utf-8")
+    steps = build_pipeline_steps(
+        create_run_context(enabled, output_root=tmp_path, run_id="lgbm"),
+        python_executable="python",
+        options=PipelineOptions(skip_data_prep=True, skip_train=True, skip_checkpoint_selection=True, skip_recall=True, skip_candidates=True, skip_weight_search=True),
+    )
+    names = [step.name for step in steps]
+    assert names[0] == "训练 LightGBM LambdaRank"
+    assert "LambdaRank 打分 valid" in names
+    assert names[-1] == "离线排序评估 test"
+    train_command = " ".join(steps[0].command)
+    assert f"--train-parquet {tmp_path / 'lgbm' / 'ranking' / 'train.parquet'}" in train_command
+    assert "-m fashionrec ranker-train" in train_command
+    eval_commands = [" ".join(step.command) for step in steps if step.name.startswith("离线排序评估")]
+    assert eval_commands
+    assert all(f"--ranker-scored-csv {tmp_path / 'lgbm' / 'ranking' / 'valid_scored.csv'}" in command or f"--ranker-scored-csv {tmp_path / 'lgbm' / 'ranking' / 'test_scored.csv'}" in command for command in eval_commands)
+    default_eval = [" ".join(step.command) for step in default_steps if step.name.startswith("离线排序评估")]
+    assert default_eval
+    assert all("--ranker-scored-csv" not in command for command in default_eval)
+
+
 def test_pipeline_uses_only_the_unified_cli(tmp_path: Path) -> None:
     context = create_run_context("configs/experiment.yaml", output_root=tmp_path, run_id="run-4")
     commands = [" ".join(step.command) for step in build_pipeline_steps(context, python_executable="python", options=PipelineOptions())]
