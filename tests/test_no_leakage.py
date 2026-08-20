@@ -15,6 +15,11 @@ from fashionrec.data.split import (  # 切分与 as-of 特征
     user_item_counts_as_of,  # 用户偏好
     validate_time_split,  # 时间因果
 )  # 导入结束
+from fashionrec.data.user_features import (  # 2.3 as-of 用户行为
+    assert_user_features_ignore_future_events,
+    load_item_metadata,
+)
+from fashionrec.data.cross_features import assert_cross_features_ignore_future_events  # 2.4 交叉
 from fashionrec.data.filter import fit_train_item_universe
 from fashionrec.recall.popular import build_popular_index  # 热门索引
 
@@ -127,3 +132,80 @@ def test_optional_item_sampling_is_fitted_on_train_only() -> None:
 
     assert selected == {"train_item"}
     assert "future_hot" not in selected
+
+
+def test_user_behavior_features_ignore_label_week(tmp_path: Path) -> None:  # 2.3 混入标签周不得改 as-of
+    articles = tmp_path / "articles.csv"
+    pd.DataFrame(
+        {
+            "article_id": ["0000000001", "0000000009"],
+            "product_code": ["100", "900"],
+            "colour_group_name": ["Blue", "Red"],
+            "department_name": ["Jersey", "Shoes"],
+            "product_type_name": ["T-shirt", "Sneaker"],
+        }
+    ).to_csv(articles, index=False)
+    meta = load_item_metadata(articles)
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "0000000001",
+                "date": "2020-09-08",
+                "quantity": 2,
+                "mean_price": 0.02,
+                "sales_channel_mode": 1,
+            },
+            {
+                "user_id": "u1",
+                "item_id": "0000000009",
+                "date": "2020-09-16",
+                "quantity": 99,
+                "mean_price": 0.50,
+                "sales_channel_mode": 2,
+            },
+        ]
+    )
+    assert_user_features_ignore_future_events(
+        events,
+        user_id="u1",
+        as_of="2020-09-15",
+        item_metadata=meta,
+        windows=(7, 28),
+    )
+
+
+def test_cross_features_ignore_label_week(tmp_path: Path) -> None:  # 2.4 标签周不得改变交叉特征
+    articles = tmp_path / "articles.csv"
+    pd.DataFrame(
+        {
+            "article_id": ["0000000001", "0000000009"],
+            "product_code": ["100", "900"],
+            "colour_group_name": ["Blue", "Red"],
+            "department_name": ["Jersey", "Shoes"],
+            "product_type_name": ["T-shirt", "Sneaker"],
+        }
+    ).to_csv(articles, index=False)
+    meta = load_item_metadata(articles)
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "0000000001",
+                "date": "2020-09-08",
+                "quantity": 2,
+                "mean_price": 0.02,
+                "sales_channel_mode": 1,
+            },
+            {
+                "user_id": "u1",
+                "item_id": "0000000009",
+                "date": "2020-09-16",
+                "quantity": 99,
+                "mean_price": 0.50,
+                "sales_channel_mode": 2,
+            },
+        ]
+    )
+    pairs = pd.DataFrame([{"user_id": "u1", "item_id": "0000000001", "as_of_date": "2020-09-15"}])
+    assert_cross_features_ignore_future_events(events, pairs, meta)

@@ -10,6 +10,14 @@ from pathlib import Path  # 导入路径处理类
 from fashionrec.data.build_baskets import BASKET_SCHEMA_VERSION, build_baskets  # 可选按天购物篮
 from fashionrec.data.build_events import EVENT_SCHEMA_VERSION, build_events  # 可选 user-day-item 事件
 from fashionrec.data.build_item_features import build_item_features  # 导入商品特征构建函数
+from fashionrec.data.user_features import USER_FEATURE_SCHEMA_VERSION, build_user_features  # as-of 行为特征
+from fashionrec.data.cross_features import CROSS_FEATURE_SCHEMA_VERSION, build_cross_features  # 用户×商品交叉
+from fashionrec.data.customer_features import (  # 用户静态画像
+    CUSTOMER_FEATURE_SCHEMA_VERSION,
+    DEFAULT_CUSTOMERS,
+    build_customer_features,
+)
+from fashionrec.data.item_features import ITEM_FEATURE_SCHEMA_VERSION  # 全量商品特征语义
 from fashionrec.data.build_sequences import prepare_recbole_benchmark_files, read_max_item_list_length  # 数据层序列构建
 from fashionrec.data.labels import LABEL_SCHEMA_VERSION, build_labels  # 可选 next-basket 标签
 from fashionrec.data.snapshots import SNAPSHOT_SCHEMA_VERSION  # 快照索引语义
@@ -63,6 +71,10 @@ def processed_layout(processed_dir: Path) -> dict[str, Path]:  # 一次运行内
         "snapshots": root / "snapshots",  # (user, as_of_date) 样本索引
         "labels": root / "labels",  # next-basket 去重标签
         "backtest": root / "backtest",  # 多窗口切分；默认不写
+        "item_features": root / "item_features" / "items.parquet",  # SKU/款式静态特征
+        "customer_features": root / "customer_features" / "customers.parquet",  # 用户静态画像
+        "user_features": root / "user_features",  # as-of 行为特征，按 as_of_date 分区
+        "cross_features": root / "cross_features",  # 用户×商品交叉，按 as_of_date 分区
         "manifest": root / "manifest.json",  # 数据清单
     }  # 布局结束
 
@@ -144,6 +156,28 @@ def main(argv: list[str] | None = None) -> None:  # 命令行入口：按顺序�
         action="store_true",  # 布尔开关
         help="Write rolling backtest splits under --processed-dir/backtest; official test is window 0 only.",
     )  # --build-backtest 结束
+    parser.add_argument(  # 默认跳过；需要事件/交易 + 切分边界
+        "--build-user-features",
+        action="store_true",
+        help="Write point-in-time user behavior features under --processed-dir/user_features; off by default.",
+    )  # --build-user-features 结束
+    parser.add_argument(  # 默认跳过；需要 labels 或 --candidates
+        "--build-cross-features",
+        action="store_true",
+        help="Write user-item cross features under --processed-dir/cross_features; requires --build-labels or --candidates.",
+    )  # --build-cross-features 结束
+    parser.add_argument(  # 显式候选对（无标签时）
+        "--candidates",
+        type=Path,
+        default=None,
+        help="CSV with user_id,item_id,as_of_date for cross features when labels are not built.",
+    )  # --candidates 结束
+    parser.add_argument(  # 用户主数据
+        "--customers",
+        type=Path,
+        default=DEFAULT_CUSTOMERS,
+        help="customers.csv for static user features.",
+    )  # --customers 结束
     parser.add_argument(  # 同款新色标签需要 articles
         "--articles",  # 参数名
         type=Path,  # 路径
@@ -179,6 +213,10 @@ def main(argv: list[str] | None = None) -> None:  # 命令行入口：按顺序�
         )  # 拉长结束
     min_user_purchases = experiment.data.min_user_purchases if experiment is not None else MIN_USER_PURCHASES  # 最少购买
     max_user_history = experiment.data.max_user_history if experiment is not None else MAX_USER_HISTORY  # 历史上限
+    keep_full_item_universe = (  # 默认保留全量目录 SKU，Top-30k 只走 --with-filter
+        experiment.data.keep_full_item_universe if experiment is not None else True
+    )
+    customers_input = Path(args.customers)  # 默认 raw customers
     split_result = None  # 保存切分边界供 manifest 使用
     transactions_input = RAW_PATH  # 默认 raw；with-filter 时覆盖为本 run 产物
 
@@ -199,6 +237,9 @@ def main(argv: list[str] | None = None) -> None:  # 命令行入口：按顺序�
             with_filter=True,  # 过滤模式
             filtered_path=filtered_dir / "transactions_train.csv",  # 本 run 产物
         )  # 选择结束
+        filtered_customers = filtered_dir / "customers.csv"  # 本 run 过滤用户
+        if filtered_customers.is_file():  # 与交易同源
+            customers_input = filtered_customers  # 用 filtered customers
         step = 2  # 下一步从 2 开始编号
     else:  # 未指定过滤
         transactions_input = select_transactions_input(with_filter=False)  # 永远 raw
@@ -261,6 +302,18 @@ def main(argv: list[str] | None = None) -> None:  # 命令行入口：按顺序�
     )
     step += 1
 
+    inter_paths_for_users = (layout["train"], layout["valid"], layout["test"])  # 切分用户并集
+    _run_step(  # 2.2 用户静态特征，不依赖 hm_seq
+        f"{step}/6 build_customer_features",
+        lambda: build_customer_features(
+            customers_path=customers_input,  # raw 或本 run filtered
+            output_path=layout["customer_features"],  # parquet
+            inter_paths=inter_paths_for_users,  # 补齐 unknown
+            keep_full_customer_universe=True,  # 保留全量 customers 目录
+        ),
+    )
+    step += 1
+
     if args.build_labels:  # 切分完成后才写标签，训练快照不会吃到 valid/test 周
         if split_result is None:  # 没有时间边界就不能生成 weekly 快照
             raise RuntimeError("split must finish before --build-labels")  # 失败
@@ -280,6 +333,39 @@ def main(argv: list[str] | None = None) -> None:  # 命令行入口：按顺序�
             ),  # 构建结束
         )  # 标签步骤结束
 
+    if args.build_user_features:  # 2.3 as-of 行为特征
+        if split_result is None:  # 无切分边界
+            raise RuntimeError("split must finish before --build-user-features")  # 失败
+        horizon_days = experiment.label.horizon_days if experiment is not None else 7  # 默认 7 天
+        _run_step(  # 每个 snapshot 只用 as_of 及以前历史
+            "build user behavior features",
+            lambda: build_user_features(
+                split=split_result,  # 时间切分
+                output_dir=layout["user_features"],  # 分区 parquet
+                horizon_days=horizon_days,  # 快照日历
+                events_dir=layout["events"] if args.build_events else None,  # 复用事件
+                transactions_path=None if args.build_events else transactions_input,  # 否则交易
+                articles_path=args.articles,  # 品类/颜色/款式
+            ),
+        )  # 用户行为特征结束
+
+    if args.build_cross_features:  # 2.4 用户×商品交叉
+        labels_dir = layout["labels"] if layout["labels"].exists() or args.build_labels else None  # 标签对
+        if labels_dir is None and args.candidates is None:  # 无对来源
+            raise RuntimeError("--build-cross-features requires --build-labels (or existing labels/) or --candidates")  # 失败
+        _run_step(
+            "build user-item cross features",
+            lambda: build_cross_features(
+                output_dir=layout["cross_features"],
+                events_dir=layout["events"] if args.build_events else None,
+                transactions_path=None if args.build_events else transactions_input,
+                articles_path=args.articles,
+                labels_dir=labels_dir,
+                candidates_path=args.candidates,
+                customers_path=customers_input,
+            ),
+        )  # 交叉特征结束
+
     if args.build_backtest:  # 显式请求才写多窗口，默认不训三遍、不写三份切分
         if split_result is None:  # 没有官方锚点
             raise RuntimeError("split must finish before --build-backtest")  # 失败
@@ -296,20 +382,41 @@ def main(argv: list[str] | None = None) -> None:  # 命令行入口：按顺序�
                 n_windows=n_windows,  # 窗口数
                 max_date=split_result.max_date,  # 与官方切分同一锚点
             )  # 切分结束
-            if not args.build_labels:  # 未同时开标签则只写切分
+            if not args.build_labels and not args.build_user_features and not args.build_cross_features:  # 只切分
                 return  # 结束
-            for window, window_split in written:  # 每窗口自己的 next-basket 标签
+            for window, window_split in written:  # 每窗口标签/特征
                 paths = window_split_paths(layout["backtest"], window.window_id)  # 窗口目录
-                build_labels(  # 训练标签不会吃到该窗口的 valid/test
-                    split=window_split,  # 该窗口时间切分
-                    snapshots_dir=paths["snapshots"],  # 窗口索引
-                    labels_dir=paths["labels"],  # 窗口标签
-                    horizon_days=horizon_days,  # 未来窗口
-                    events_dir=layout["events"] if args.build_events else None,  # 复用本 run 事件
-                    transactions_path=None if args.build_events else transactions_input,  # 否则从交易现算
-                    articles_path=args.articles,  # 款式映射
-                    target_mode=target_mode,  # 目前只支持 next_basket
-                )  # 标签结束
+                window_labels_dir = paths["labels"]  # 窗口标签目录
+                if args.build_labels:  # next-basket 标签
+                    build_labels(  # 训练标签不会吃到该窗口的 valid/test
+                        split=window_split,  # 该窗口时间切分
+                        snapshots_dir=paths["snapshots"],  # 窗口索引
+                        labels_dir=window_labels_dir,  # 窗口标签
+                        horizon_days=horizon_days,  # 未来窗口
+                        events_dir=layout["events"] if args.build_events else None,  # 复用本 run 事件
+                        transactions_path=None if args.build_events else transactions_input,  # 否则从交易现算
+                        articles_path=args.articles,  # 款式映射
+                        target_mode=target_mode,  # 目前只支持 next_basket
+                    )  # 标签结束
+                if args.build_user_features:  # 每窗口 as-of 行为
+                    build_user_features(
+                        split=window_split,  # 窗口切分
+                        output_dir=paths["root"] / "user_features",  # 窗口内目录
+                        horizon_days=horizon_days,  # 快照
+                        events_dir=layout["events"] if args.build_events else None,  # 事件
+                        transactions_path=None if args.build_events else transactions_input,  # 交易
+                        articles_path=args.articles,  # 商品
+                    )
+                if args.build_cross_features:  # 每窗口交叉特征
+                    build_cross_features(
+                        output_dir=paths["root"] / "cross_features",
+                        events_dir=layout["events"] if args.build_events else None,
+                        transactions_path=None if args.build_events else transactions_input,
+                        articles_path=args.articles,
+                        labels_dir=window_labels_dir if (args.build_labels or window_labels_dir.exists()) else None,
+                        candidates_path=args.candidates,
+                        customers_path=customers_input,
+                    )
 
         _run_step("build backtest windows", _build_backtest)  # 多窗口切分
 
@@ -322,13 +429,14 @@ def main(argv: list[str] | None = None) -> None:  # 命令行入口：按顺序�
             "max_user_history": max_user_history,  # 历史上限
             "with_filter": bool(args.with_filter),  # 是否先过滤
             "transactions_input": str(transactions_input),  # 本次明确选择的输入路径
+            "customers_input": str(customers_input),  # 用户主数据路径
             "processed_dir": str(processed_dir),  # 本次产物目录
             "skip_item_features": bool(args.skip_item_features),  # 是否跳过序列特征
             "sasrec_config": str(config_path),  # 序列配置
             "experiment_config": str(args.experiment_config) if args.experiment_config else None,  # 实验协议
             "experiment_name": experiment.experiment.name if experiment is not None else None,  # 实验名
             "seed": experiment.experiment.seed if experiment is not None else None,  # 种子
-            "keep_full_item_universe": experiment.data.keep_full_item_universe if experiment is not None else None,  # 全量 SKU
+            "keep_full_item_universe": keep_full_item_universe,  # 全量 SKU
             "deduplicate_user_day_item": experiment.data.deduplicate_user_day_item if experiment is not None else None,  # 同日去重
             "label_target_mode": experiment.label.target_mode if experiment is not None else None,  # 标签语义
             "label_horizon_days": experiment.label.horizon_days if experiment is not None else None,  # 标签窗口
@@ -348,6 +456,17 @@ def main(argv: list[str] | None = None) -> None:  # 命令行入口：按顺序�
             "backtest_schema_version": BACKTEST_SCHEMA_VERSION if args.build_backtest else None,  # 回测语义
             "backtest_dir": str(layout["backtest"]) if args.build_backtest else None,  # 回测目录
             "backtest_windows": n_windows if args.build_backtest else None,  # 窗口数
+            "item_features_schema_version": None if args.skip_item_features else ITEM_FEATURE_SCHEMA_VERSION,  # 商品特征
+            "item_features_path": None if args.skip_item_features else str(layout["item_features"]),  # parquet
+            "customer_features_schema_version": CUSTOMER_FEATURE_SCHEMA_VERSION,  # 用户特征
+            "customer_features_path": str(layout["customer_features"]),  # parquet
+            "build_user_features": bool(args.build_user_features),  # 是否写出 as-of 行为
+            "user_features_schema_version": USER_FEATURE_SCHEMA_VERSION if args.build_user_features else None,  # 语义
+            "user_features_dir": str(layout["user_features"]) if args.build_user_features else None,  # 目录
+            "build_cross_features": bool(args.build_cross_features),  # 是否写出交叉特征
+            "cross_features_schema_version": CROSS_FEATURE_SCHEMA_VERSION if args.build_cross_features else None,  # 语义
+            "cross_features_dir": str(layout["cross_features"]) if args.build_cross_features else None,  # 目录
+            "cross_features_candidates_path": str(args.candidates) if args.candidates is not None else None,  # 显式候选
         }  # 预处理记录结束
         payload = build_processed_hm_manifest(  # 流式统计处理后文件
             processed_dir=processed_dir,  # 不扫描全局 data/processed
@@ -383,12 +502,15 @@ def main(argv: list[str] | None = None) -> None:  # 命令行入口：按顺序�
     _run_step(  # 执行商品特征构建
         f"{step}/6 build_item_features",
         lambda: build_item_features(
-            output_path=layout["seq_item"],  # 本 run 的 item 文件
+            articles_path=args.articles,  # 与标签同一份 articles
+            output_path=layout["seq_item"],  # 本 run 的 RecBole item 文件
             inter_paths=(  # 本 run 的序列划分
                 layout["seq"] / "hm_seq.train.inter",
                 layout["seq"] / "hm_seq.valid.inter",
                 layout["seq"] / "hm_seq.test.inter",
             ),
+            features_output_path=layout["item_features"],  # 全量 SKU/款式 parquet
+            keep_full_item_universe=keep_full_item_universe,  # 默认不截断目录
         ),
     )  # 商品特征结束
 
