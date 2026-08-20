@@ -73,6 +73,8 @@ def test_default_experiment_config_loads() -> None:  # 默认 YAML 能加载且�
     assert config.candidate.per_channel_top_k == 200  # 每通道
     assert config.candidate.final_top_k == 12  # 最终 K
     assert config.candidate.union_top_k == 500  # 并集上限
+    assert config.candidate.repurchase_top_k == 200  # 复购通道
+    assert config.candidate.union_feature_version == "hm.candidate_union.v2"  # 并集证据
     assert config.ranking.enabled is False  # 阶段 0 关闭学习排序
     assert config.ranking.library == "lightgbm"  # 默认库
     assert config.ranking.objective == "lambdarank"  # 默认目标

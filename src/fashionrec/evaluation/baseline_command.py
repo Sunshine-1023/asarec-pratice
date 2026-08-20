@@ -8,7 +8,9 @@ from pathlib import Path  # 路径
 from typing import Any, Mapping  # 类型
 
 from fashionrec.data.manifest import build_processed_hm_manifest  # 数据清单
+from fashionrec.evaluation.candidate_diagnostics import diagnose_users  # 候选诊断
 from fashionrec.evaluation.experiment_report import (  # 实验报告
+    save_candidate_diagnostics,  # 候选覆盖报告
     save_experiment_outputs,  # 落盘
     score_users,  # 计分
     utc_run_id,  # 运行 ID
@@ -227,8 +229,30 @@ def run_baseline(  # 在统一协议下评估当前代码基线
     for item in variants:  # 每个变体
         for row in item["per_tier"]:  # 每一层
             per_tier_rows.append({"variant": item["name"], **row})  # 加上变体名
-    save_experiment_outputs(run_dir, manifest, metrics, per_tier_rows, k=config.candidate.final_top_k)  # 落盘
-    print(json.dumps({"run_dir": str(run_dir), "metrics": metrics}, ensure_ascii=False, indent=2))  # 打印摘要
+    output_paths = save_experiment_outputs(run_dir, manifest, metrics, per_tier_rows, k=config.candidate.final_top_k)  # 落盘
+    diagnostic_users = [  # 诊断输入
+        {
+            "user_id": row["user_id"],  # 用户
+            "actual_items": row["actual_items"],  # 标签
+            "history": row["history"],  # 历史序列
+            "history_set": row["history_set"],  # 历史集合
+            "history_len": len(row["history"]),  # 长度
+            "channel_candidates": row["channel_candidates"],  # 各通道候选
+        }
+        for row in context.users  # 评估用户
+    ]
+    channels = ["popular", "category_popular", "item2item"]  # 规则通道
+    if sequence_csv_exists:  # 有序列召回
+        channels.append(context.sequence_channel)  # 序列通道
+    diagnostics = diagnose_users(  # 候选诊断
+        diagnostic_users,  # 用户
+        channels=channels,  # 通道顺序
+        activity_tiers=config.evaluation.activity_tiers,  # 活跃度分层
+        union_k_for_counts=config.candidate.union_top_k,  # 并集 K
+    )
+    coverage_paths = save_candidate_diagnostics(run_dir, diagnostics)  # JSON + CSV
+    output_paths.update(coverage_paths)  # 合并路径
+    print(json.dumps({"run_dir": str(run_dir), "metrics": metrics, "candidate_diagnostics": str(coverage_paths["candidate_diagnostics"])}, ensure_ascii=False, indent=2))  # 打印摘要
     return run_dir  # 返回目录
 
 

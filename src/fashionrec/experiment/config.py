@@ -48,7 +48,11 @@ class CandidateConfig:  # 候选召回协议
     category_popular_top_k: int  # 类别热门通道 Top-K
     item2item_top_k: int  # item2item 通道 Top-K
     sequence_top_k: int  # 序列模型通道 Top-K
+    repurchase_top_k: int  # 复购通道 Top-K
+    style_top_k: int  # 款式通道 Top-K
+    content_top_k: int  # 内容通道 Top-K
     union_top_k: int  # 多通道并集上限
+    union_feature_version: str  # 并集证据 schema
     final_top_k: int  # 最终推荐条数
 
 
@@ -224,7 +228,13 @@ def load_experiment_config(path: str | Path | None = None) -> ExperimentConfig: 
         ),  # 类别热门 Top-K 结束
         item2item_top_k=_require_int(candidate_raw, "item2item_top_k", "candidate", default=per_channel_top_k),  # item2item Top-K
         sequence_top_k=_require_int(candidate_raw, "sequence_top_k", "candidate", default=per_channel_top_k),  # 序列通道 Top-K
+        repurchase_top_k=_require_int(candidate_raw, "repurchase_top_k", "candidate", default=per_channel_top_k),  # 复购 Top-K
+        style_top_k=_require_int(candidate_raw, "style_top_k", "candidate", default=per_channel_top_k),  # 款式 Top-K
+        content_top_k=_require_int(candidate_raw, "content_top_k", "candidate", default=per_channel_top_k),  # 内容 Top-K
         union_top_k=_require_int(candidate_raw, "union_top_k", "candidate"),  # 并集上限
+        union_feature_version=_require_str(  # 并集证据版本
+            candidate_raw, "union_feature_version", "candidate", default="hm.candidate_union.v2"
+        ),
         final_top_k=_require_int(candidate_raw, "final_top_k", "candidate"),  # 最终 Top-K
     )  # 候选协议结束
     label = LabelConfig(  # 组装标签协议

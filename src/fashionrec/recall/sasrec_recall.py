@@ -13,6 +13,8 @@ import pandas as pd  # 导入 pandas 数据分析库
 import torch  # 导入 PyTorch 深度学习框架
 import yaml  # 导入 YAML 配置文件解析
 
+from fashionrec.data.paths import ProcessedDataPaths
+
 if __package__ is None or __package__ == "":  # 若以脚本方式直接运行
     project_root = Path(__file__).resolve().parents[2]  # 定位项目根目录
     if str(project_root) not in sys.path:  # 若根目录不在搜索路径中
@@ -22,8 +24,6 @@ DEFAULT_CONFIG = Path("configs/sasrec.yaml")  # 默认 SASRec 配置文件
 DEFAULT_CKPT_DIR = Path("outputs/checkpoints/sasrec")  # 默认 SASRec 检查点目录
 DEFAULT_RECALL_TOP_K = 100  # 默认召回 Top-K
 DEFAULT_OUTPUT_DIR = Path("outputs/recommendations")  # 默认召回结果输出目录
-VALID_INTER = Path("data/processed/hm/hm.valid.inter")  # 验证集交互文件路径
-TEST_INTER = Path("data/processed/hm/hm.test.inter")  # 测试集交互文件路径
 
 
 def _load_recall_settings(config_path: Path | None) -> tuple[Path, int, str]:  # 从 YAML 配置读取召回设置
@@ -70,11 +70,11 @@ def _as_str(x: object) -> str:  # 将对象安全转换为字符串
     return str(x)  # 否则直接转为字符串
 
 
-def _load_eval_users(eval_split: str) -> list[str]:  # 加载评估划分中的用户 ID 列表
+def _load_eval_users(eval_split: str, data_paths: ProcessedDataPaths) -> list[str]:  # 加载评估划分中的用户 ID 列表
     if eval_split not in {"valid", "test"}:  # 校验评估划分名称
         raise ValueError("eval_split must be 'valid' or 'test'")  # 非法划分则报错
 
-    path = VALID_INTER if eval_split == "valid" else TEST_INTER  # 选择对应交互文件
+    path = data_paths.valid_inter if eval_split == "valid" else data_paths.test_inter  # 选择对应交互文件
     if not path.exists():  # 若文件不存在
         raise FileNotFoundError(f"Missing eval split file: {path}")  # 抛出文件缺失异常
 
@@ -104,6 +104,7 @@ def export_sasrec_recall(  # 导出 SASRec / SASRecF Top-K 召回结果到 CSV
     config_path: str | Path | None = None,  # 模型配置文件路径
     checkpoint_dir: str | Path | None = None,  # 检查点目录（优先于 config）
     channel: str | None = None,  # 召回通道名（默认从 config 的 model 推导）
+    data_dir: str | Path | None = None,  # 评估用户所属的 processed dataset root
 ) -> Path:  # 返回输出文件路径
     """  # 函数文档字符串开始
     Export SASRec-family top-k recall for one eval split.  # 导出指定评估划分的 SASRec 系列 Top-K 召回
@@ -123,6 +124,7 @@ def export_sasrec_recall(  # 导出 SASRec / SASRecF Top-K 召回结果到 CSV
     if eval_split not in {"valid", "test"}:  # 校验评估划分名称
         raise ValueError("eval_split must be 'valid' or 'test'")  # 非法划分则报错
 
+    data_paths = ProcessedDataPaths.from_root(data_dir)
     cfg_checkpoint_dir, cfg_recall_top_k, cfg_channel = _load_recall_settings(  # 从配置读取默认设置
         Path(config_path) if config_path is not None else None  # 解析配置路径
     )  # 配置加载结束
@@ -154,7 +156,7 @@ def export_sasrec_recall(  # 导出 SASRec / SASRecF Top-K 召回结果到 CSV
     iid_field = eval_dataset.iid_field  # 商品 ID 字段名
     device = config["device"]  # 获取推理设备
 
-    eval_users = _load_eval_users(eval_split)  # 加载评估用户列表
+    eval_users = _load_eval_users(eval_split, data_paths)  # 加载评估用户列表
     token2id = eval_dataset.field2token_id[uid_field]  # 获取用户 token 到内部 ID 映射
     internal_uids = [token2id[user_id] for user_id in eval_users if user_id in token2id]  # 过滤并转换内部用户 ID
     user_rows = _resolve_user_rows(eval_dataset, internal_uids)  # 解析用户对应的数据行
@@ -212,6 +214,7 @@ def main(  # 命令行入口函数
     parser.add_argument("--model-file", type=Path, default=None)  # 模型检查点路径参数
     parser.add_argument("--checkpoint-dir", type=Path, default=None)  # 检查点目录参数
     parser.add_argument("--output-path", type=Path, default=None)  # 输出 CSV 路径参数
+    parser.add_argument("--data-dir", type=Path, default=None, help="Processed dataset root; defaults to data/processed.")
     parser.add_argument(  # 添加 Top-K 参数
         "--top-k",  # 参数名
         type=int,  # 整数类型
@@ -229,6 +232,7 @@ def main(  # 命令行入口函数
         batch_size=args.batch_size,  # 传入批大小
         config_path=args.config,  # 传入配置文件
         checkpoint_dir=args.checkpoint_dir,  # 传入检查点目录
+        data_dir=args.data_dir,
     )  # 结束 export_sasrec_recall 调用
 
 

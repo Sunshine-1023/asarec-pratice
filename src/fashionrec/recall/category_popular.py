@@ -3,7 +3,7 @@
 from __future__ import annotations  # 启用延迟注解评估
 
 import sys  # 导入系统模块用于路径注入
-from collections import defaultdict  # 导入默认字典
+from collections import defaultdict  # 聚合分
 from dataclasses import dataclass  # 导入数据类
 from pathlib import Path  # 导入路径处理类
 
@@ -18,7 +18,13 @@ from fashionrec.data.build_item_features import (  # 复用商品特征清洗逻
     RAW_ARTICLES_PATH,  # 原始商品元数据路径
     clean_category_token,  # 清洗类别 token
 )  # 商品特征工具导入结束
-from fashionrec.data.time import week_window_start
+from fashionrec.recall.window_scores import (  # 共享多窗口 rank 归一化
+    DEFAULT_WINDOW_WEEKS,
+    DEFAULT_WINDOW_WEIGHTS,
+    build_window_popularity,
+    filter_interactions_as_of,
+    rank_score_items,
+)
 from fashionrec.domain.ids import canonical_item_id
 
 
@@ -33,8 +39,8 @@ CATEGORY_FIELDS = (  # 第一版使用的类别字段
     "garment_group_name",  # 服装组名称
     "colour_group_name",  # 颜色组名称
 )  # 类别字段元组结束
-WINDOW_WEEKS = (1, 2, 4)  # 时间衰减窗口（周）
-WINDOW_WEIGHTS = (0.5, 0.3, 0.15)  # 各窗口融合权重
+WINDOW_WEEKS = DEFAULT_WINDOW_WEEKS  # 1/2/4/12 周
+WINDOW_WEIGHTS = DEFAULT_WINDOW_WEIGHTS  # rank 归一化后加权
 PER_BUCKET_TOP_K = 100  # 每个 (类别字段, 类别值) 桶保留的热门商品数
 SEED_ITEMS = 10  # 用用户最近 N 个购买推断类别
 CATEGORY_POPULAR_RECALL_TOP_K = 50  # 召回输出 Top-K
@@ -116,13 +122,9 @@ def build_category_popular_index(  # 构建类别热门索引
     window_weeks: tuple[int, ...] = WINDOW_WEEKS,  # 时间窗口周数
     window_weights: tuple[float, ...] = WINDOW_WEIGHTS,  # 各窗口融合权重
     per_bucket_top_k: int = PER_BUCKET_TOP_K,  # 每个桶保留的热门商品数
+    as_of: pd.Timestamp | str | None = None,  # as-of 预测日
 ) -> CategoryPopularIndex:  # 返回类别热门索引对象
-    """  # 函数文档字符串开始
-    Build per-category popularity buckets from recent-week train interactions.  # 从近期训练交互构建按类别分组的热门商品桶
-
-    For each category field/value, rank items by:  # 每个类别字段/值内按分数排序
-      score = 0.5 * heat_1w + 0.3 * heat_2w + 0.15 * heat_4w  # 多窗口加权热度公式
-    """  # 从近期训练交互构建按类别分组的热门商品桶
+    """Build per-category buckets using rank-normalized multi-window heat."""  # 类别桶内多窗口 rank 归一化
     if len(window_weeks) != len(window_weights):  # 校验窗口与权重长度
         raise ValueError("window_weeks and window_weights must have the same length")  # 长度不一致则报错
 
@@ -138,6 +140,7 @@ def build_category_popular_index(  # 构建类别热门索引
         return CategoryPopularIndex(buckets={}, item_categories={})  # 返回空索引
 
     interactions = _load_interactions(*paths)  # 加载交互数据
+    interactions = filter_interactions_as_of(interactions, as_of)  # as-of 截断
     if interactions.empty:  # 若无交互记录
         return CategoryPopularIndex(buckets={}, item_categories=item_categories)  # 返回空桶但保留类别映射
 
@@ -147,25 +150,20 @@ def build_category_popular_index(  # 构建类别热门索引
     if merged.empty:  # 若合并后无数据
         return CategoryPopularIndex(buckets={}, item_categories=item_categories)  # 返回空桶
 
-    max_date = merged["date"].max()  # 数据最大日期
-    scores: dict[tuple[str, str, str], float] = defaultdict(float)  # (field, value, item) -> score
-
-    for weeks, weight in zip(window_weeks, window_weights):  # 遍历各时间窗口
-        start_date = week_window_start(max_date, weeks)  # 计算窗口起始日
-        window_df = merged[merged["date"] >= start_date]  # 保留窗口内交互
-        for field in category_fields:  # 遍历每个类别字段
-            counts = window_df.groupby([field, "item_id:token"], observed=True).size()  # 统计桶内商品热度
-            for (category_value, item_id), count in counts.items():  # 遍历每个 (类别值, 商品) 计数
-                scores[(field, str(category_value), str(item_id))] += weight * float(count)  # 累加加权热度
-
-    bucket_items: dict[tuple[str, str], list[tuple[str, float]]] = defaultdict(list)  # (field, value) -> 商品列表
-    for (field, category_value, item_id), score in scores.items():  # 遍历每个商品分数
-        bucket_items[(field, category_value)].append((item_id, score))  # 归入对应类别桶
-
     buckets: dict[str, dict[str, list[tuple[str, float]]]] = {field: {} for field in category_fields}  # 初始化桶结构
-    for (field, category_value), items in bucket_items.items():  # 遍历每个类别桶
-        ranked = sorted(items, key=lambda x: (-x[1], x[0]))[:per_bucket_top_k]  # 按分数降序截取 Top-K
-        buckets[field][category_value] = ranked  # 写入桶索引
+    for field in category_fields:  # 每个类别字段
+        for category_value, bucket_df in merged.groupby(field, observed=True):  # 每个类别值
+            scores = build_window_popularity(  # 窗口 rank 融合
+                bucket_df,
+                item_col="item_id:token",
+                window_weeks=window_weeks,
+                window_weights=window_weights,
+                as_of=as_of,
+            )
+            if not scores:  # 空桶
+                continue  # 跳过
+            ranked = rank_score_items(scores)[:per_bucket_top_k]  # Top-K
+            buckets[field][str(category_value)] = ranked  # 写入
 
     return CategoryPopularIndex(buckets=buckets, item_categories=item_categories)  # 返回类别热门索引
 

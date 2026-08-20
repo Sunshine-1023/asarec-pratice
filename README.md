@@ -43,6 +43,8 @@ FashionRec-Transformer/
 
 日常训练与评估统一从 Makefile 启动。Makefile 不复制流水线逻辑，所有目标最终都进入 `fashionrec` CLI，再由 package 内的 pipeline 层根据统一配置和 run-scoped 产物目录编排。
 
+两条链路明确隔离：不传 `--data-dir` 的旧 CLI 命令保持读取 `data/processed/`，用于 baseline 对照；`make pipeline` 和所有带 `RUN_ID` 的 Make 目标将数据、模型、召回、候选和评估统一绑定到 `outputs/runs/<run_id>/`，不能读取 baseline 的处理中间数据。
+
 ```bash
 conda activate dl
 
@@ -174,7 +176,7 @@ make data RUN_ID=exp-001                 # 始终使用原始 transactions
 make data RUN_ID=exp-001 WITH_FILTER=1   # 生成并使用本次 train-fitted filtered transactions
 ```
 
-数据准备不会因为 `data/raw/filtered/` 中存在历史文件而自动切换输入；实际使用路径会写入 `data/processed/manifest.json`。
+数据准备不会因为 `data/raw/filtered/` 中存在历史文件而自动切换输入；vNext 的实际使用路径会写入 `outputs/runs/<run_id>/data/manifest.json`。
 
 ### ② 训练 SASRecF
 
@@ -182,7 +184,7 @@ make data RUN_ID=exp-001 WITH_FILTER=1   # 生成并使用本次 train-fitted fi
 make train RUN_ID=exp-001
 ```
 
-checkpoint：`outputs/checkpoints/sasrecf/`
+checkpoint：`outputs/runs/<run_id>/checkpoints/sasrecf/`
 
 同一 run/seed 的 shortlist 目录非空时训练会安全失败，避免混入旧 checkpoint。需要复用旧结果时跳过训练；需要重新训练时使用新的 run ID 或 checkpoint 目录。
 
@@ -192,7 +194,7 @@ checkpoint：`outputs/checkpoints/sasrecf/`
 make recall RUN_ID=exp-001
 ```
 
-输出：`outputs/recommendations/sasrecf_{valid,test}.csv`
+输出：`outputs/runs/<run_id>/recall/sasrecf_{valid,test}.csv`
 
 ### ④ 规则召回与候选物化
 
@@ -200,7 +202,7 @@ make recall RUN_ID=exp-001
 make candidates RUN_ID=exp-001
 ```
 
-该阶段输出 `popular_*.csv`、`category_popular_*.csv`、`item2item_*.csv` 和候选并集，并把 SASRecF 召回合入 `outputs/runs/<run_id>/candidates/{valid,test}.csv`，权重搜索与评估消费同一份固定候选。
+该阶段输出各通道召回到 `outputs/runs/<run_id>/recall/`，候选并集写入 `outputs/runs/<run_id>/candidates/{valid,test}.csv`；权重搜索与评估消费同一份固定候选。
 
 ### ⑤⑥ 权重搜索与融合评估
 
@@ -211,9 +213,9 @@ make evaluate RUN_ID=exp-001
 
 输出：
 
-- `outputs/evaluation/best_fusion_weights.json`
-- `outputs/recommendations/fusion_{valid,test}.csv`
-- `outputs/evaluation/fusion_{valid,test}_metrics.json`
+- `outputs/runs/<run_id>/ranking/best_fusion_weights.json`
+- `outputs/runs/<run_id>/ranking/fusion_{valid,test}.csv`
+- `outputs/runs/<run_id>/evaluation/fusion_{valid,test}_metrics.json`
 
 ---
 

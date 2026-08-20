@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -15,7 +16,14 @@ if __package__ is None or __package__ == "":
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
-from fashionrec.candidates.union import union_candidates
+from fashionrec.candidates.union import (
+    DEFAULT_UNION_TOP_K,
+    UNION_SCHEMA_VERSION,
+    build_union_evidence,
+    union_candidates,
+    write_union_evidence_csv,
+)
+from fashionrec.data.paths import ProcessedDataPaths
 from fashionrec.data.split import (
     TEST_INTER_FILE,
     TRAIN_INTER_FILE,
@@ -32,7 +40,10 @@ from fashionrec.recall.item2item import (
     SEED_ITEMS as ITEM2ITEM_SEED_ITEMS,
     TOP_SIM_K,
 )
+from fashionrec.recall.content import CONTENT_RECALL_TOP_K
 from fashionrec.recall.popular import POPULAR_RECALL_TOP_K
+from fashionrec.recall.repurchase import REPURCHASE_RECALL_TOP_K
+from fashionrec.recall.style import STYLE_RECALL_TOP_K
 from fashionrec.recall.registry import PrecomputedChannel, build_rule_channel_registry, select_channels
 
 
@@ -41,12 +52,26 @@ VALID_INTER = VALID_INTER_FILE
 TEST_INTER = TEST_INTER_FILE
 OUTPUT_DIR = Path("outputs/recommendations")
 
-ChannelName = Literal["popular", "category_popular", "item2item"]
-ALL_CHANNELS: tuple[ChannelName, ...] = ("popular", "category_popular", "item2item")
+ChannelName = Literal[
+    "popular",
+    "category_popular",
+    "item2item",
+    "repurchase",
+    "style",
+    "content",
+]
+ALL_CHANNELS: tuple[ChannelName, ...] = (
+    "popular",
+    "category_popular",
+    "item2item",
+    "repurchase",
+    "style",
+    "content",
+)
 
 
-def _load_eval_users(eval_split: str) -> list[str]:
-    path = VALID_INTER if eval_split == "valid" else TEST_INTER
+def _load_eval_users(eval_split: str, data_paths: ProcessedDataPaths) -> list[str]:
+    path = data_paths.valid_inter if eval_split == "valid" else data_paths.test_inter
     if not path.exists():
         raise FileNotFoundError(f"Missing eval split file: {path}")
     frame = pd.read_csv(path, sep="\t", usecols=["user_id:token"])
@@ -58,16 +83,21 @@ def export_rule_recalls(
     channels: tuple[ChannelName, ...] = ALL_CHANNELS,
     top_k: int | None = None,
     output_dir: Path = OUTPUT_DIR,
-    union_top_k: int = 300,
+    union_top_k: int = DEFAULT_UNION_TOP_K,
     candidate_output_dir: Path | None = None,
     sequence_recall_csv: Path | None = None,
     sequence_top_k: int = 100,
     channel_top_k: dict[str, int] | None = None,
     max_user_history: int = 100,
+    item_file: Path | None = None,
+    articles_path: Path | None = None,
+    customers_path: Path | None = None,
+    union_feature_version: str = UNION_SCHEMA_VERSION,
     item2item_cooccur_weeks: int = COOCCUR_WEEKS,
     item2item_top_sim_k: int = TOP_SIM_K,
     item2item_seed_items: int = ITEM2ITEM_SEED_ITEMS,
     category_seed_items: int = CATEGORY_SEED_ITEMS,
+    data_dir: str | Path | None = None,
 ) -> dict[str, Path]:
     """Build each index once and materialize one shared Candidate contract."""
     if eval_split not in {"valid", "test"}:
@@ -76,23 +106,33 @@ def export_rule_recalls(
     if unknown:
         raise ValueError(f"Unknown channels: {unknown}; available={list(ALL_CHANNELS)}")
 
-    history_paths = history_paths_for_eval(eval_split, TRAIN_INTER, VALID_INTER)
-    assert_history_paths_allowed(eval_split, history_paths, TRAIN_INTER, VALID_INTER, TEST_INTER)
+    data_paths = ProcessedDataPaths.from_root(data_dir)
+    resolved_item_file = item_file or data_paths.seq_item
+    history_paths = history_paths_for_eval(eval_split, data_paths.train_inter, data_paths.valid_inter)
+    assert_history_paths_allowed(eval_split, history_paths, data_paths.train_inter, data_paths.valid_inter, data_paths.test_inter)
     user_history = build_user_history(*history_paths, max_user_history=max_user_history)
-    registry = select_channels(
-        build_rule_channel_registry(
-            history_paths,
-            item2item_cooccur_weeks=item2item_cooccur_weeks,
-            item2item_top_sim_k=item2item_top_sim_k,
-            item2item_seed_items=item2item_seed_items,
-            category_seed_items=category_seed_items,
-        ),
-        list(channels),
+    registry = build_rule_channel_registry(
+        history_paths,
+        item2item_cooccur_weeks=item2item_cooccur_weeks,
+        item2item_top_sim_k=item2item_top_sim_k,
+        item2item_seed_items=item2item_seed_items,
+        category_seed_items=category_seed_items,
+        item_file=resolved_item_file,
+        customers_path=customers_path,
+        articles_path=articles_path,
     )
+    available = tuple(registry.keys())
+    missing_registry = [channel for channel in channels if channel not in registry]
+    if missing_registry:
+        raise ValueError(f"Channels not in registry (missing articles_path?): {missing_registry}; available={available}")
+    registry = select_channels(registry, list(channels))
     defaults = {
         "popular": POPULAR_RECALL_TOP_K,
         "category_popular": CATEGORY_POPULAR_RECALL_TOP_K,
         "item2item": ITEM2ITEM_RECALL_TOP_K,
+        "repurchase": REPURCHASE_RECALL_TOP_K,
+        "style": STYLE_RECALL_TOP_K,
+        "content": CONTENT_RECALL_TOP_K,
     }
     top_k_by_channel = {
         channel: int(top_k if top_k is not None else (channel_top_k or {}).get(channel, defaults[channel]))
@@ -110,7 +150,7 @@ def export_rule_recalls(
         top_k_by_channel[sequence_name] = sequence_top_k
 
     candidates = generate_candidates(
-        eval_users=_load_eval_users(eval_split),
+        eval_users=_load_eval_users(eval_split, data_paths),
         user_history=user_history,
         channels=registry,
         split=eval_split,
@@ -127,11 +167,29 @@ def export_rule_recalls(
 
     union_dir = candidate_output_dir or output_dir
     union_path = union_dir / f"{eval_split}.csv"
-    outputs["candidate_union"] = write_candidate_csv(
-        union_candidates(candidates, top_k_items_per_user=union_top_k),
-        union_path,
+    source_timestamp = datetime.now(tz=UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    union_rows = union_candidates(
+        candidates,
+        top_k_items_per_user=union_top_k,
+        source_timestamp=source_timestamp,
+        feature_version=union_feature_version,
+    )
+    outputs["candidate_union"] = write_candidate_csv(union_rows, union_path)
+    channel_order = tuple(top_k_by_channel.keys())
+    evidence_path = union_dir / f"{eval_split}_evidence.csv"
+    outputs["candidate_union_evidence"] = write_union_evidence_csv(
+        build_union_evidence(
+            candidates,
+            top_k_items_per_user=union_top_k,
+            channels=channel_order,
+            source_timestamp=source_timestamp,
+            feature_version=union_feature_version,
+        ),
+        evidence_path,
+        channels=channel_order,
     )
     print(f"Saved candidate union ({eval_split}): {union_path}")
+    print(f"Saved candidate union evidence ({eval_split}): {evidence_path}")
     return outputs
 
 
@@ -144,11 +202,18 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--candidate-output-dir", type=Path, default=None)
     parser.add_argument("--sequence-recall-csv", type=Path, default=None)
     parser.add_argument("--sequence-top-k", type=int, default=100)
-    parser.add_argument("--union-top-k", type=int, default=300)
+    parser.add_argument("--union-top-k", type=int, default=DEFAULT_UNION_TOP_K)
+    parser.add_argument("--repurchase-top-k", type=int, default=REPURCHASE_RECALL_TOP_K)
+    parser.add_argument("--style-top-k", type=int, default=STYLE_RECALL_TOP_K)
+    parser.add_argument("--content-top-k", type=int, default=CONTENT_RECALL_TOP_K)
+    parser.add_argument("--item-file", type=Path, default=None, help="Item features; defaults to --data-dir/hm_seq/hm_seq.item.")
+    parser.add_argument("--articles-path", type=Path, default=None)
+    parser.add_argument("--customers-path", type=Path, default=None)
     parser.add_argument("--popular-top-k", type=int, default=POPULAR_RECALL_TOP_K)
     parser.add_argument("--category-popular-top-k", type=int, default=CATEGORY_POPULAR_RECALL_TOP_K)
     parser.add_argument("--item2item-top-k", type=int, default=ITEM2ITEM_RECALL_TOP_K)
     parser.add_argument("--max-user-history", type=int, default=100)
+    parser.add_argument("--data-dir", type=Path, default=None, help="Processed dataset root; defaults to data/processed.")
     args = parser.parse_args(argv)
 
     channels: tuple[ChannelName, ...]
@@ -172,8 +237,15 @@ def main(argv: list[str] | None = None) -> None:
                 "popular": args.popular_top_k,
                 "category_popular": args.category_popular_top_k,
                 "item2item": args.item2item_top_k,
+                "repurchase": args.repurchase_top_k,
+                "style": args.style_top_k,
+                "content": args.content_top_k,
             },
             max_user_history=args.max_user_history,
+            item_file=args.item_file,
+            articles_path=args.articles_path,
+            customers_path=args.customers_path,
+            data_dir=args.data_dir,
         )
     print(f"All rule-based recalls finished in {time.perf_counter() - started:.1f}s")
     print(f"Output directory: {args.output_dir.resolve()}")

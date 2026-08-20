@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from fashionrec.data.paths import ProcessedDataPaths
 from fashionrec.training.checkpoint_selection import score_recall_csv, select_checkpoint_by_score
 from fashionrec.training.checkpoints import discover_checkpoint_candidates
 
@@ -12,13 +13,16 @@ from fashionrec.training.checkpoints import discover_checkpoint_candidates
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="fashionrec select-checkpoint", description="Select SASRecF checkpoint by valid user-week MAP@K")
     parser.add_argument("--checkpoint-dir", type=Path, required=True)
-    parser.add_argument("--valid-inter", type=Path, default=Path("data/processed/hm/hm.valid.inter"))
+    parser.add_argument("--data-dir", type=Path, default=None, help="Processed dataset root; defaults to data/processed.")
+    parser.add_argument("--valid-inter", type=Path, default=None, help="Explicit valid split override.")
     parser.add_argument("--config", type=Path, default=Path("configs/sasrecf.yaml"))
     parser.add_argument("--recall-dir", type=Path, required=True)
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--selected-model-path", type=Path, required=True)
     parser.add_argument("--top-k", type=int, default=12)
     args = parser.parse_args(argv)
+    data_paths = ProcessedDataPaths.from_root(args.data_dir)
+    valid_inter = args.valid_inter or data_paths.valid_inter
 
     candidates = discover_checkpoint_candidates(args.checkpoint_dir)
     args.recall_dir.mkdir(parents=True, exist_ok=True)
@@ -35,8 +39,9 @@ def main(argv: list[str] | None = None) -> None:
             top_k=args.top_k,
             config_path=args.config,
             channel="sasrecf",
+            data_dir=data_paths.root,
         )
-        return score_recall_csv(args.valid_inter, recall_path, k=args.top_k)
+        return score_recall_csv(valid_inter, recall_path, k=args.top_k)
 
     selected = select_checkpoint_by_score(
         candidates,

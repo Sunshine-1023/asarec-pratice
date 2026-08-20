@@ -6,11 +6,7 @@ from logging import getLogger  # 导入日志记录器获取函数
 from pathlib import Path  # 导入路径处理类
 import torch  # 导入 PyTorch 深度学习框架
 
-from fashionrec.data.build_sequences import (  # 训练只消费数据准备阶段的固定产物
-    RECB_TEST_FILE,
-    RECB_TRAIN_FILE,
-    RECB_VALID_FILE,
-)
+from fashionrec.data.paths import ProcessedDataPaths
 from fashionrec.training.checkpoints import install_validation_checkpoint_shortlist
 
 
@@ -37,10 +33,10 @@ def _assert_benchmark_dataset_layout(config_path: Path) -> None:  # 校验基准
         )  # 异常抛出
 
 
-def _assert_prepared_training_data(model_name: str) -> None:
-    required = [RECB_TRAIN_FILE, RECB_VALID_FILE, RECB_TEST_FILE]
+def _assert_prepared_training_data(model_name: str, data_paths: ProcessedDataPaths) -> None:
+    required = [data_paths.seq_train_inter, data_paths.seq_valid_inter, data_paths.seq_test_inter]
     if model_name.upper() == "SASRECF":
-        required.append(Path("data/processed/hm_seq/hm_seq.item"))
+        required.append(data_paths.seq_item)
     missing = [path for path in required if not path.is_file()]
     if missing:
         raise FileNotFoundError(
@@ -89,6 +85,7 @@ def fit_model_without_test_evaluation(trainer, train_data, valid_data, *, show_p
 def run_sasrec_with_device(  # 在选定设备上运行 SASRec 训练与验证
     config_path: Path,  # 配置文件路径
     model_name: str,  # 模型名称
+    data_dir: Path | None = None,  # 明确的数据根目录；未给时保持 baseline 默认
     seed: int | None = None,  # 可选随机种子
     checkpoint_dir: Path | None = None,  # 可选 run-scoped checkpoint 目录
     checkpoint_shortlist_size: int = 5,
@@ -107,6 +104,8 @@ def run_sasrec_with_device(  # 在选定设备上运行 SASRec 训练与验证
     gpu_id = "0" if use_gpu else ""  # 设置 GPU 设备 ID
 
     config_dict = {"use_gpu": use_gpu, "gpu_id": gpu_id}  # 构建设备相关配置字典
+    if data_dir is not None:
+        config_dict["data_path"] = str(data_dir)
     if seed is not None:  # 若指定了随机种子
         config_dict["seed"] = seed  # 将种子写入配置
     if checkpoint_dir is not None:  # 正式流水线覆盖全局 checkpoint 目录
@@ -175,6 +174,12 @@ def main(  # 命令行入口函数
 ) -> None:  # 无返回值
     parser = argparse.ArgumentParser(prog="fashionrec train", description="Train SASRec/SASRecF on H&M data")  # 创建参数解析器
     parser.add_argument("--config", default=str(default_config))  # 配置文件路径参数
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=None,
+        help="Processed dataset root containing hm/ and hm_seq/; defaults to data/processed for baseline compatibility.",
+    )
     parser.add_argument("--seed", type=int, default=None, help="Run one custom seed")  # 单种子参数
     parser.add_argument("--checkpoint-dir", type=Path, default=None, help="Override RecBole checkpoint directory")
     parser.add_argument(
@@ -204,13 +209,15 @@ def main(  # 命令行入口函数
     _assert_benchmark_dataset_layout(config_path)  # 校验基准数据集配置
 
     model_name = _read_model_name(config_path)  # 从配置读取模型名称
-    _assert_prepared_training_data(model_name)  # 训练不再隐式重建或覆盖数据产物
+    data_paths = ProcessedDataPaths.from_root(args.data_dir)
+    _assert_prepared_training_data(model_name, data_paths)  # 训练不再隐式重建或覆盖数据产物
 
     seed_list = _parse_seeds(args.seed, args.seeds)  # 解析种子列表
     if not seed_list:  # 未指定种子时单次运行
         run_sasrec_with_device(
             config_path,
             model_name=model_name,
+            data_dir=data_paths.root,
             checkpoint_dir=args.checkpoint_dir,
             checkpoint_shortlist_size=args.checkpoint_shortlist_size,
         )
@@ -221,6 +228,7 @@ def main(  # 命令行入口函数
         best_valid_score, best_valid_result, checkpoint_candidates = run_sasrec_with_device(  # 以当前种子训练验证
             config_path,
             model_name=model_name,
+            data_dir=data_paths.root,
             seed=run_seed,
             checkpoint_dir=args.checkpoint_dir,
             checkpoint_shortlist_size=args.checkpoint_shortlist_size,

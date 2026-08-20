@@ -116,3 +116,30 @@ def save_experiment_outputs(  # 将一次实验的清单与指标落到 run 目�
         "metrics": write_json(run_dir / "metrics.json", metrics),  # 总体指标
         "per_tier_metrics": write_csv(run_dir / "per_tier_metrics.csv", per_tier_rows, tier_fields),  # 分层指标
     }  # 路径字典结束
+
+
+def save_candidate_diagnostics(  # 候选诊断 JSON + CSV
+    run_dir: Path,  # 实验目录
+    payload: Mapping[str, Any],  # diagnose_users 输出
+) -> dict[str, Path]:  # 写出的文件
+    run_dir.mkdir(parents=True, exist_ok=True)  # 确保目录
+    json_path = write_json(run_dir / "candidate_diagnostics.json", payload)  # 完整 JSON
+    channel_rows = list(payload.get("per_channel_metrics", []))  # 单通道
+    union_rows = list(payload.get("union_metrics", []))  # 并集
+    channel_fields = sorted({key for row in channel_rows for key in row.keys()}, key=lambda name: (name != "channel", name)) if channel_rows else ["channel", "k", "scope", "n_users"]  # 列
+    union_fields = sorted({key for row in union_rows for key in row.keys()}, key=lambda name: (name != "k", name)) if union_rows else ["k", "scope", "n_users"]  # 列
+    return {  # 路径
+        "candidate_diagnostics": json_path,  # JSON
+        "candidate_channel_metrics": write_csv(run_dir / "candidate_channel_metrics.csv", channel_rows, channel_fields),  # 单通道
+        "candidate_union_metrics": write_csv(run_dir / "candidate_union_metrics.csv", union_rows, union_fields),  # 并集
+        "candidate_pair_jaccard": write_csv(  # 通道对
+            run_dir / "candidate_pair_jaccard.csv",
+            list(payload.get("channel_pair_jaccard", [])),
+            ["channel_a", "channel_b", "mean_jaccard", "n_users"],
+        ),
+        "candidate_exclusive_hits": write_csv(  # 独占命中
+            run_dir / "candidate_exclusive_hits.csv",
+            list(payload.get("exclusive_hits", [])),
+            ["channel", "k", "mean_exclusive_hit_rate", "mean_exclusive_hits", "n_users_with_hits"],
+        ),
+    }  # 返回

@@ -24,6 +24,7 @@ from fashionrec.data.split import (  # 时间切分与防泄漏路径约定
     assert_history_paths_allowed,  # 检查召回索引未混入标签周
     history_paths_for_eval,  # 按评估划分选择历史路径
 )  # 切分模块导入结束
+from fashionrec.data.paths import ProcessedDataPaths
 from fashionrec.evaluation.metrics import hit_at_k, map_at_k, ndcg_at_k, recall_at_k  # 统一指标实现
 from fashionrec.domain.ids import canonical_item_id, canonical_user_id  # 统一 ID 契约
 from fashionrec.ranking.fusion import (  # 导入融合相关函数
@@ -125,6 +126,7 @@ def build_fusion_eval_context(  # 构建融合评估上下文（召回只算一�
     strict: bool = False,  # 正式运行可要求缺失依赖立即失败
     candidate_csv: str | Path | None = None,  # 可直接消费已物化四路候选
     max_user_history: int = 100,  # 用户分层与排除已购使用的历史上限
+    data_dir: str | Path | None = None,  # processed dataset root
 ) -> FusionEvalContext:  # 返回融合评估上下文
     if eval_split not in {"valid", "test"}:  # 校验评估划分参数
         raise ValueError("eval_split must be 'valid' or 'test'")  # 非法划分时抛出异常
@@ -134,9 +136,10 @@ def build_fusion_eval_context(  # 构建融合评估上下文（召回只算一�
         if sasrec_recall_csv is not None  # 判断路径是否非空
         else default_sasrec_recall_csv(eval_split)  # 否则使用默认路径
     )  # 结束路径选择
-    eval_path = VALID_INTER if eval_split == "valid" else TEST_INTER  # 选择验证或测试交互文件
-    history_paths = history_paths_for_eval(eval_split, TRAIN_INTER, VALID_INTER)  # 只使用预测时刻之前的交互
-    assert_history_paths_allowed(eval_split, history_paths, TRAIN_INTER, VALID_INTER, TEST_INTER)  # 防止标签周泄漏进召回索引
+    data_paths = ProcessedDataPaths.from_root(data_dir)
+    eval_path = data_paths.valid_inter if eval_split == "valid" else data_paths.test_inter
+    history_paths = history_paths_for_eval(eval_split, data_paths.train_inter, data_paths.valid_inter)
+    assert_history_paths_allowed(eval_split, history_paths, data_paths.train_inter, data_paths.valid_inter, data_paths.test_inter)
 
     user_history_map = build_user_history(*history_paths, max_user_history=max_user_history)  # 构建统一长度的用户历史
     targets = _load_targets(eval_path)  # 加载评估集真实标签
@@ -165,6 +168,7 @@ def build_fusion_eval_context(  # 构建融合评估上下文（召回只算一�
             item2item_top_sim_k=item2item_top_sim_k,
             item2item_seed_items=item2item_seed_items,
             category_seed_items=category_popular_seed_items,
+            item_file=data_paths.seq_item,
         )
         registry[resolved_sequence_channel] = PrecomputedChannel(
             resolved_sequence_channel,
@@ -257,6 +261,7 @@ def evaluate_fusion(  # 执行多通道融合并评估
     strict: bool = False,  # 严格模式禁止缺失序列召回
     candidate_csv: str | Path | None = None,  # 已物化候选输入
     max_user_history: int = 100,  # 用户分层与排除已购使用的历史上限
+    data_dir: str | Path | None = None,  # processed dataset root
 ) -> tuple[Path, Path, dict[str, float]]:  # 返回推荐文件路径、指标文件路径与指标字典
     """Run multi-channel recall fusion and evaluate on valid/test split."""  # 在 valid/test 划分上运行多通道召回融合并评估
     if eval_split not in {"valid", "test"}:  # 校验评估划分参数
@@ -278,6 +283,7 @@ def evaluate_fusion(  # 执行多通道融合并评估
         strict=strict,
         candidate_csv=candidate_csv,
         max_user_history=max_user_history,
+        data_dir=data_dir,
     )
     targets = context.targets
     resolved_sequence_channel = context.sequence_channel
@@ -421,6 +427,7 @@ def main(argv: list[str] | None = None) -> None:  # 命令行入口函数
     parser.add_argument("--evaluation-dir", type=Path, default=EVAL_OUT_DIR)  # 指标输出目录
     parser.add_argument("--strict", action="store_true")  # 缺失依赖直接失败
     parser.add_argument("--max-user-history", type=int, default=100)  # 历史长度上限
+    parser.add_argument("--data-dir", type=Path, default=None, help="Processed dataset root; defaults to data/processed.")
     parser.add_argument(  # 序列通道名参数
         "--sequence-channel",  # 参数名
         type=str,  # 字符串类型
@@ -480,6 +487,7 @@ def main(argv: list[str] | None = None) -> None:  # 命令行入口函数
         evaluation_dir=args.evaluation_dir,  # 指标输出目录
         strict=args.strict,  # 严格依赖检查
         max_user_history=args.max_user_history,  # 统一历史上限
+        data_dir=args.data_dir,
     )  # 结束评估调用
 
 

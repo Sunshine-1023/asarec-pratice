@@ -32,7 +32,11 @@ candidate:
   category_popular_top_k: 200
   item2item_top_k: 200
   sequence_top_k: 200
-  union_top_k: 500
+  repurchase_top_k: 200
+  style_top_k: 200
+  content_top_k: 200
+  union_top_k: 500  # 默认并集；实验时可改为 1000
+  union_feature_version: hm.candidate_union.v2
   final_top_k: 12
 
 ranking:

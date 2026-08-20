@@ -41,6 +41,18 @@ def test_pipeline_steps_share_one_run_artifact_tree(tmp_path: Path) -> None:
     assert len(eval_commands) == 2
     assert all(f"--weights-json {weights_path}" in command for command in eval_commands)
     assert all("outputs/recommendations" not in command for command in commands)
+    run_data = tmp_path / "run-1" / "data"
+    data_consumers = [
+        command
+        for command in commands
+        if any(f" fashionrec {name} " in command for name in ("train", "select-checkpoint", "recall", "candidates", "weights", "evaluate"))
+    ]
+    assert data_consumers
+    assert all(command.count("--data-dir") == 1 for command in data_consumers)
+    assert all(f"--data-dir {run_data}" in command for command in data_consumers)
+    candidate_commands = [command for command in commands if " fashionrec candidates " in command]
+    assert all("--articles-path data/raw/articles.csv" in command for command in candidate_commands)
+    assert all("--customers-path data/raw/customers.csv" in command for command in candidate_commands)
 
 
 def test_pipeline_backtest_flag_does_not_train_three_models(tmp_path: Path) -> None:
