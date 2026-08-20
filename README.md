@@ -4,7 +4,7 @@
 > 📊 **成果图表（答辩/PPT 用）：** [outputs/figures/README.md](outputs/figures/README.md)
 > 从零讲清数据 → 训练 → 四路召回 → 融合 → 评估 → 权重搜索全流程。
 
-基于 [H&M 交易数据](https://www.kaggle.com/competitions/h-and-m-personalized-fashion-recommendations) 的时尚推荐项目。当前**主实验线**为 **SASRecF**（带商品类别特征）+ **四路离线召回融合**（Popular / Category Popular / Item2Item / SASRecF），按用户活跃度自适应加权，最终以 **Offline MAP@12** 作为主评估口径。
+基于 [H&M 交易数据](https://www.kaggle.com/competitions/h-and-m-personalized-fashion-recommendations) 的时尚推荐项目。项目提供两条物理隔离的正式训练链：稳定的 **SASRecF + 四路 Weighted RRF baseline**，以及使用购物篮标签、PIT 特征、扩展召回和 **LightGBM LambdaRank** 的 industrial 实验链。
 
 ---
 
@@ -43,46 +43,61 @@ FashionRec-Transformer/
 
 日常训练与评估统一从 Makefile 启动。Makefile 不复制流水线逻辑，所有目标最终都进入 `fashionrec` CLI，再由 package 内的 pipeline 层根据统一配置和 run-scoped 产物目录编排。
 
-两条链路明确隔离：不传 `--data-dir` 的旧 CLI 命令保持读取 `data/processed/`，用于 baseline 对照；`make pipeline` 和所有带 `RUN_ID` 的 Make 目标将数据、模型、召回、候选和评估统一绑定到 `outputs/runs/<run_id>/`，不能读取 baseline 的处理中间数据。
+两条链路使用独立配置和产物命名空间。它们只共享只读的 `data/raw/` 与源码，不共享处理数据、checkpoint、候选、排序模型、权重或指标：
+
+```text
+outputs/runs/baseline/<run-id>/
+outputs/runs/industrial/<run-id>/
+```
+
+相同 run-id 可以同时用于两个 profile；同一 profile 内若配置哈希发生变化，续跑会直接失败。
 
 ```bash
 conda activate dl
 
 make help
-make pipeline WITH_FILTER=1
+make baseline WITH_FILTER=1
+make industrial WITH_FILTER=1
 ```
 
 完整运行不指定 `RUN_ID` 时会自动创建新实验目录。分阶段执行或续跑必须显式使用同一个 `RUN_ID`：
 
 ```bash
-make data RUN_ID=exp-001 WITH_FILTER=1
-make train RUN_ID=exp-001
-make select-checkpoint RUN_ID=exp-001
-make recall RUN_ID=exp-001
-make candidates RUN_ID=exp-001
-make weights RUN_ID=exp-001
-make evaluate RUN_ID=exp-001
+make data PROFILE=baseline RUN_ID=exp-001 WITH_FILTER=1
+make train PROFILE=baseline RUN_ID=exp-001
+make select-checkpoint PROFILE=baseline RUN_ID=exp-001
+make recall PROFILE=baseline RUN_ID=exp-001
+make candidates PROFILE=baseline RUN_ID=exp-001
+make weights PROFILE=baseline RUN_ID=exp-001
+make evaluate PROFILE=baseline RUN_ID=exp-001
 ```
 
 模型已经训练完成时，可以一次运行全部下游步骤：
 
 ```bash
-make downstream RUN_ID=exp-001
+make downstream PROFILE=baseline RUN_ID=exp-001
 ```
 
-常用变量：`PYTHON`、`EXPERIMENT_CONFIG`、`OUTPUT_ROOT`、`RUN_ID`、`WITH_FILTER=0|1`、`STRICT=0|1`、`WEIGHTS_JSON`。额外的 pipeline 参数可通过 `EXTRA_ARGS` 传入。命令预览使用 `make -n <target> ...`，不会实际启动训练。
+工业链分阶段运行时将 `PROFILE` 改为 `industrial`；`make ranker PROFILE=industrial RUN_ID=<id>` 可在已有数据和候选上重建训练表、训练 LambdaRank、打分并评估。常用变量：`PYTHON`、`PROFILE`、`EXPERIMENT_CONFIG`、`OUTPUT_ROOT`、`RUN_ID`、`WITH_FILTER=0|1`、`STRICT=0|1`、`WEIGHTS_JSON`。
 
 ---
 
-## 脚本执行顺序（主实验线）
+## 两条训练链
+
+| Profile | 配置 | 数据/标签 | 候选 | 排序与评估 |
+|---|---|---|---|---|
+| `baseline` | `configs/baseline/experiment.yaml` | 行级时间切分、SASRecF 序列 | Popular / Category Popular / Item2Item / SASRecF | valid 搜索 Weighted RRF，行级购买集合 MAP@12 |
+| `industrial` | `configs/industrial/experiment.yaml` | user-day-item、basket、next-basket、PIT 用户特征 | baseline + Repurchase / Style / Content | 因果快照训练表、LambdaRank、next-basket RRF 对照 |
+
+## 脚本执行顺序
 
 | 步骤 | Make 目标 / CLI | 说明 | 必需 |
 |------|------|------|------|
 | ① | `make data` / `fashionrec data` | filter（可选）→ preprocess → split → hm_seq → item 特征 | ✅ |
-| ② | `make train` / `fashionrec train` | 使用 `configs/sasrecf.yaml` 训练 SASRecF | ✅ |
+| ② | `make train` / 应用内 `train` | 使用各应用自己的 `models/sasrecf.yaml` 训练 SASRecF | ✅ |
 | ③ | `make select-checkpoint` / `fashionrec select-checkpoint` | 完整 valid 用户周 MAP@12 选择 checkpoint | ✅ |
 | ④ | `make recall` / `fashionrec recall` | 使用选定模型导出 valid/test 召回 | ✅ |
-| ⑤ | `make candidates` / `fashionrec candidates` | 规则召回 + 四路候选并集物化 | ✅ |
+| ⑤ | `make candidates` / `fashionrec candidates` | baseline 四路或 industrial 扩展多路候选物化 | ✅ |
 | ⑥ | `make weights` / `fashionrec weights` | valid 上坐标下降搜索融合权重 | ✅ |
 | ⑦ | `make evaluate` / `fashionrec evaluate` | 四路融合 + MAP@12（test 只在最终阶段评估） | ✅ |
 
@@ -90,10 +105,14 @@ make downstream RUN_ID=exp-001
 
 ```bash
 conda activate dl
-make pipeline WITH_FILTER=1
+make baseline WITH_FILTER=1
+# 或
+make industrial WITH_FILTER=1
 ```
 
-正式流水线会创建 `outputs/runs/<run_id>/`，把配置快照、checkpoint、召回、候选、排序和指标隔离保存。完整依赖方向与数据契约见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+正式流水线会创建 `outputs/runs/<profile>/<run_id>/`，把配置快照、checkpoint、召回、候选、排序和指标隔离保存。完整依赖方向与数据契约见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+
+两条链现在是两个 top-level 应用。Baseline 位于 `src/fashionrec/baseline/`，Industrial 位于 `src/fashionrec/industrial/`；它们分别拥有 data/models/recall/ranking/evaluation/pipeline/CLI 及正式算法实现。共享层只保留 ID、Candidate、Recall/Ranker 接口、中立 I/O、纯指标和运行器；旧顶层算法目录仅用于 import 兼容。
 
 可选参数：
 
@@ -105,7 +124,10 @@ make pipeline WITH_FILTER=1
 
 ```bash
 PYTHONPATH=src python -m fashionrec --help
-PYTHONPATH=src python -m fashionrec pipeline --with-filter
+PYTHONPATH=src python -m fashionrec.baseline pipeline --experiment-config configs/baseline/experiment.yaml
+PYTHONPATH=src python -m fashionrec.industrial pipeline --experiment-config configs/industrial/experiment.yaml
+PYTHONPATH=src python -m fashionrec.baseline --help
+PYTHONPATH=src python -m fashionrec.industrial --help
 PYTHONPATH=src python -m fashionrec train --help
 ```
 
@@ -149,8 +171,9 @@ filter（train 拟合商品集）→ preprocess → split → model_train → hm
 |------|-----|------|
 | 数据窗口 | 6 周（4+1+1） | `filter.py` / `preprocess.py` / `split.py` |
 | 每用户最长行为 | 使用时截断至 100，不在切分前删行 | 序列 / 召回上下文 |
-| checkpoint 粗筛 | 所有验证 epoch 中 RecBole-valid 指标 Top-5 | `configs/experiment.yaml` |
-| 序列最大长度 | 100 | `configs/sasrecf.yaml` |
+| checkpoint 粗筛 | 所有验证 epoch 中 RecBole-valid 指标 Top-5 | `configs/baseline/experiment.yaml` |
+| Baseline 序列最大长度 | 100 | `configs/baseline/models/sasrecf.yaml` |
+| Industrial 序列最大长度 | 100 | `configs/industrial/models/sasrecf.yaml` |
 | 召回 Top-K | 100 → 融合 Top-12 | 召回 + `offline_eval.py` |
 | 主指标 | MAP@12 | `offline_eval.py` |
 
@@ -176,7 +199,7 @@ make data RUN_ID=exp-001                 # 始终使用原始 transactions
 make data RUN_ID=exp-001 WITH_FILTER=1   # 生成并使用本次 train-fitted filtered transactions
 ```
 
-数据准备不会因为 `data/raw/filtered/` 中存在历史文件而自动切换输入；vNext 的实际使用路径会写入 `outputs/runs/<run_id>/data/manifest.json`。
+数据准备不会因为 `data/raw/filtered/` 中存在历史文件而自动切换输入；实际使用路径会写入 `outputs/runs/<profile>/<run_id>/data/manifest.json`。
 
 ### ② 训练 SASRecF
 
@@ -184,7 +207,7 @@ make data RUN_ID=exp-001 WITH_FILTER=1   # 生成并使用本次 train-fitted fi
 make train RUN_ID=exp-001
 ```
 
-checkpoint：`outputs/runs/<run_id>/checkpoints/sasrecf/`
+checkpoint：`outputs/runs/<profile>/<run_id>/checkpoints/sasrecf/`
 
 同一 run/seed 的 shortlist 目录非空时训练会安全失败，避免混入旧 checkpoint。需要复用旧结果时跳过训练；需要重新训练时使用新的 run ID 或 checkpoint 目录。
 
@@ -194,7 +217,7 @@ checkpoint：`outputs/runs/<run_id>/checkpoints/sasrecf/`
 make recall RUN_ID=exp-001
 ```
 
-输出：`outputs/runs/<run_id>/recall/sasrecf_{valid,test}.csv`
+输出：`outputs/runs/<profile>/<run_id>/recall/sasrecf_{valid,test}.csv`
 
 ### ④ 规则召回与候选物化
 
@@ -202,7 +225,7 @@ make recall RUN_ID=exp-001
 make candidates RUN_ID=exp-001
 ```
 
-该阶段输出各通道召回到 `outputs/runs/<run_id>/recall/`，候选并集写入 `outputs/runs/<run_id>/candidates/{valid,test}.csv`；权重搜索与评估消费同一份固定候选。
+该阶段输出各通道召回到 `outputs/runs/<profile>/<run_id>/recall/`，候选并集写入 `outputs/runs/<profile>/<run_id>/candidates/{valid,test}.csv`；权重搜索与评估消费同一份固定候选。
 
 ### ⑤⑥ 权重搜索与融合评估
 
@@ -213,9 +236,9 @@ make evaluate RUN_ID=exp-001
 
 输出：
 
-- `outputs/runs/<run_id>/ranking/best_fusion_weights.json`
-- `outputs/runs/<run_id>/ranking/fusion_{valid,test}.csv`
-- `outputs/runs/<run_id>/evaluation/fusion_{valid,test}_metrics.json`
+- `outputs/runs/<profile>/<run_id>/ranking/best_fusion_weights.json`
+- `outputs/runs/<profile>/<run_id>/ranking/fusion_{valid,test}.csv`
+- `outputs/runs/<profile>/<run_id>/evaluation/fusion_{valid,test}_metrics.json`
 
 ---
 
@@ -223,15 +246,13 @@ make evaluate RUN_ID=exp-001
 
 | 目录 / 文件 | 职责 |
 |-------------|------|
-| `src/fashionrec/data/` | 过滤、时间切分、序列样本与商品特征 |
-| `src/fashionrec/domain/` | 用户、商品 ID 与 Candidate 数据契约 |
-| `src/fashionrec/recall/` | 四路召回和候选生成 |
-| `src/fashionrec/candidates/` | 候选去重与并集上限 |
-| `src/fashionrec/ranking/` | 加权 RRF、融合逻辑与 LambdaRank 特征 |
-| `src/fashionrec/training/` | SASRecF 训练、checkpoint 粗筛与选择 |
-| `src/fashionrec/evaluation/` | 权重搜索、离线指标与基线报告 |
+| `src/fashionrec/baseline/` | 旧协议数据、SASRecF、四路召回、Weighted RRF、评估与独立 DAG |
+| `src/fashionrec/industrial/` | 购物篮/PIT、扩展召回、SASRecF、LambdaRank、next-basket 评估与独立 DAG |
+| `src/fashionrec/shared/` | domain、interfaces、io、metrics、runtime 中立内核 |
+| `src/fashionrec/{data,recall,ranking,training,evaluation,candidates}/` | 旧 import 兼容 facade，不承载正式算法 |
+| `src/fashionrec/domain/` | 旧领域契约 import 兼容 facade |
 | `src/fashionrec/experiment/` | 配置、运行上下文与产物路径 |
-| `src/fashionrec/pipeline/` | run-scoped 阶段编排与执行 |
+| `src/fashionrec/pipeline/` | 旧 profile pipeline 兼容入口；正式 DAG 在两应用内部 |
 
 ---
 

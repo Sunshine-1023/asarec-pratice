@@ -44,6 +44,7 @@ ranking:
   library: lightgbm
   objective: lambdarank
   top_k_for_training: 500
+  train_snapshot_limit: 4  # 最近 4 个因果训练快照；控制全量索引重建成本
 
 evaluation:
   primary_metric: MAP@12

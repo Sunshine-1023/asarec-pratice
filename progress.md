@@ -1,4 +1,48 @@
 # Progress
 
-- 2026-08-18：完成仓库入口、模块清单、Git 状态与历史概览；开始读取数据链路。
-- 2026-08-18：完成数据/序列、召回/候选、RRF/特征、评估/权重搜索、配置与测试审查；确认 `backtest_windows` 尚未落地、实际排序仍是 RRF、当前没有真实数据产物；pytest 67 passed。
+- 2026-08-20：完成新一轮全链路审计；确认默认 RRF 链完整、LambdaRank 模块存在但 ranking table 生成缺失。
+- 2026-08-20：运行全量测试，215 tests 通过，退出码 0。
+- 2026-08-20：进入修复阶段 1，建立持久计划并固化兼容性/防泄漏决策。
+- 2026-08-20：完成 ranking table 命令设计；确认交叉特征必须在候选生成后计算，train 快照禁止使用全量 train SASRecF 分数。
+- 2026-08-20：修复召回 registry 的 as-of 透传、复购通道误排除历史 SKU、RRF 新通道零权重和 pipeline 三路 Top-K 透传。
+- 2026-08-20：新增 `ranker-dataset` CLI 雏形，能够规划因果 train 快照和 valid/test 固定候选排序表。
+- 2026-08-20：定向回归 38/39 通过；唯一失败为 pipeline 测试尚未适配新增 dataset 步骤。
+- 2026-08-20：确认双链路最终边界：baseline/industrial 显式 profile、独立配置和 `outputs/runs/<profile>/<run-id>` 命名空间。
+- 2026-08-20：完成 profile/config 校验、run 配置冲突与路径逃逸保护、baseline 按需召回索引、industrial next-basket 标签转发。
+- 2026-08-20：新增 `make baseline`、`make industrial`、固定 industrial 的 `make ranker`，并修复所有分阶段目标的 ranker 意外执行问题。
+- 2026-08-20：隔离/因果/物化定向测试通过；微型端到端测试已真实写出 train/valid/test ranking parquet。
+- 2026-08-20：第一次修改后的全量测试通过；待最终 `make check` 复验 CLI surface。
+- 2026-08-20：最终 `make check` 通过，236 个测试全部通过，全部公开 CLI smoke check 通过；`git diff --check` 无错误。
+- 2026-08-20：开始双 workflow 目录重构；冻结边界为结构迁移，不改变上一轮已验证的两条训练协议。
+- 2026-08-20：恢复会话并核对工作区；确认失败的大补丁未留下半迁移文件，现有差异仍是已通过 236 项测试的功能改动。
+- 2026-08-20：新增 pipeline contracts、profile-neutral common stage builders 和 baseline 显式 DAG；编译及边界扫描通过，计划等价性首次检查待修正。
+- 2026-08-20：补齐 industrial 显式 DAG 与 profile registry；两 profile 在默认和跳步组合下与旧命令序列完全一致，公共层与 baseline 依赖边界扫描通过。
+- 2026-08-20：正式 pipeline 入口已切到 registry，旧 orchestrator 缩为兼容 facade；35 项入口回归通过。
+- 2026-08-20：industrial ranking-table 物化迁至 `pipeline/industrial/ranker_dataset.py`，CLI 路由和测试已切换；19 项定向测试通过且共享层无反向 pipeline 导入。
+- 2026-08-20：profile 配置迁至 `configs/baseline/` 与 `configs/industrial/`，正式默认入口改用 baseline；旧 `configs/experiment.yaml` 仅保留兼容。
+- 2026-08-20：新增 pipeline 依赖边界测试并整理链路/integration 测试目录；首次回归发现移动后的 ROOT 层级需同步调整。
+- 2026-08-20：修正测试目录 ROOT 后，48 项结构/配置/入口定向回归通过；隔离扫描真实覆盖共享源码。
+- 2026-08-20：`make check` 最终通过，240 项测试全部成功，所有公开 CLI smoke check 通过。
+- 2026-08-20：baseline/industrial dry-run 均指向各自配置和 profile；`git diff --check`、依赖边界测试均通过，未启动 H&M 全量训练。
+- 2026-08-20：用户要求进一步做到算法应用层精细隔离；新增阶段 10–15，目标升级为 top-level baseline/industrial 两套应用与极小 shared kernel。
+- 2026-08-20：完成命令依赖审计；确定以 application wrapper 固定数据/召回/排序协议，通用算法模块降级为内部 service。
+- 2026-08-20：ID、Candidate 与纯 ranking metrics 已物理迁入 `fashionrec/shared`，旧 import facade 保留；27 项相关测试通过。
+- 2026-08-20：建立 top-level `fashionrec.baseline` 应用、独立模型配置、CLI、固定四路召回和完整 10 步 DAG；help/编译/计划检查通过。
+- 2026-08-20：建立 top-level `fashionrec.industrial` 应用、独立模型配置、固定扩展召回、next-basket 排序/评估 wrapper 和完整 14 步 DAG；help/编译/计划检查通过。
+- 2026-08-20：Makefile 正式入口切换到 `python -m fashionrec.baseline|industrial`，不再传 `--profile`；旧 pipeline registry/facade 只保留兼容。
+- 2026-08-20：Pipeline contracts 迁入 shared runtime，top-level 两应用不再导入旧 pipeline 包；51 项应用/结构/领域定向测试通过。
+- 2026-08-20：更新 Makefile、README、ARCHITECTURE 和两套模型配置所有权；旧统一 pipeline 标记为兼容入口。
+- 2026-08-20：修复 shared contracts 文件名冲突后，全量 249 项测试通过。
+- 2026-08-20：最终 `make check` 通过：249 项测试和 Baseline/Industrial 全部应用命令 smoke check 成功。
+- 2026-08-20：两套 full/staged dry-run、11 项应用边界测试、旧入口兼容、跨应用 import 扫描和 `git diff --check` 全部通过；未启动 H&M 全量训练。
+- 2026-08-20：用户确认继续做物理目录归属迁移；新增阶段 16–21，目标是旧顶层算法目录仅保留兼容 facade，两应用分别拥有正式实现。
+- 2026-08-20：完成逐模块 import 图和迁移清单；确定保留应用 wrapper API，正式 service/算法实现移动到应用内部，旧 import 后续降级为 facade。
+- 2026-08-20：新增 `shared/interfaces` 与 `shared/io`；Recall/Ranker 契约旧路径已改为兼容 facade。
+- 2026-08-20：机械复制两套 data/recall/evaluation/SASRecF 实现及应用排序实现，并将应用内 import 全部改为本应用命名空间；compileall 通过。
+- 2026-08-20：删除旧顶层 49 个算法实现文件，旧命名空间改为 `sys.modules` 兼容别名；修复了双模块加载导致的 dataclass 身份和 monkeypatch 失效。
+- 2026-08-20：Baseline/Industrial 正式实现已全部位于应用目录；Industrial 新增 `data/{events,baskets,features}.py` 公共模块和 `models/lambdarank/`。
+- 2026-08-20：边界测试升级为禁止应用引用旧顶层算法 facade，并固定目标物理目录及 facade 文件白名单；架构文档同步更新。
+- 2026-08-20：完整 `make check` 通过，251 项测试全部成功，Baseline/Industrial/兼容 CLI smoke checks 全部成功。
+- 2026-08-20：两套 DAG 计划复验通过：Baseline 10 步、Industrial 14 步，所有子命令分别指向自身应用；相同 run-id 仍按 profile 隔离。
+- 2026-08-20：`make -n baseline/industrial`、旧/新模块对象身份检查、跨应用 import 扫描、shared 反向依赖扫描与 `git diff --check` 全部通过；未启动 H&M 全量训练。
+- 2026-08-20：开始结构迁移后的双链路只读复审；新增阶段 22–26，分别检查 DAG 闭环、Baseline 逻辑、Industrial 因果逻辑和真实运行风险。

@@ -79,6 +79,7 @@ def test_default_experiment_config_loads() -> None:  # 默认 YAML 能加载且�
     assert config.ranking.library == "lightgbm"  # 默认库
     assert config.ranking.objective == "lambdarank"  # 默认目标
     assert config.ranking.top_k_for_training == 500  # 排序训练候选
+    assert config.ranking.train_snapshot_limit == 4
     assert config.evaluation.primary_metric == "MAP@12"  # 主指标
     assert set(config.evaluation.activity_tiers) == {"cold_start", "low", "medium", "high"}  # 四层都在
     assert config.evaluation.activity_tiers["high"] == (10, None)  # 高活跃无上界
@@ -102,6 +103,7 @@ def test_optional_fields_have_defaults(tmp_path: Path) -> None:  # 缺省字段�
     assert config.ranking.library == "lightgbm"  # 库默认
     assert config.ranking.objective == "lambdarank"  # 目标默认
     assert config.ranking.top_k_for_training == 500  # 训练候选默认
+    assert config.ranking.train_snapshot_limit == 4
 
 
 def test_missing_required_field_raises(tmp_path: Path) -> None:  # 缺必填字段报错
@@ -132,6 +134,24 @@ def test_union_top_k_must_cover_final_top_k(tmp_path: Path) -> None:  # 并集�
     path = _write_yaml(tmp_path, payload)  # 写出
     with pytest.raises(ExperimentConfigError, match="union_top_k"):  # 报错
         load_experiment_config(path)  # 加载应失败
+
+
+@pytest.mark.parametrize(
+    ("ranking", "label", "message"),
+    [
+        ({"enabled": True, "library": "catboost", "objective": "yetirank"}, {}, "lightgbm"),
+        ({"enabled": True}, {"target_mode": "next_item"}, "next_basket"),
+    ],
+)
+def test_enabled_industrial_protocol_rejects_unsupported_contracts(
+    tmp_path: Path,
+    ranking: dict,
+    label: dict,
+    message: str,
+) -> None:
+    path = _write_yaml(tmp_path, _minimal_payload(ranking=ranking, label=label))
+    with pytest.raises(ExperimentConfigError, match=message):
+        load_experiment_config(path)
 
 
 def test_activity_tiers_match_current_fusion() -> None:  # 配置分层与现有融合函数一致

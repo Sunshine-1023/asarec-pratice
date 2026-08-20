@@ -8,3 +8,4 @@ recbole
 pyyaml
 pytest
 pyarrow
+lightgbm

@@ -7,6 +7,8 @@ from pathlib import Path  # 处理仓库路径
 from types import SimpleNamespace  # 构造假的命令模块
 
 from fashionrec import cli  # 统一 CLI
+from fashionrec.baseline import cli as baseline_cli
+from fashionrec.industrial import cli as industrial_cli
 
 
 ROOT = Path(__file__).resolve().parents[1]  # 项目根目录
@@ -24,6 +26,15 @@ def test_cli_exposes_profile_data_command() -> None:  # raw 体检必须走统�
 def test_cli_exposes_ranker_commands() -> None:
     assert cli.COMMANDS["ranker-train"].module == "fashionrec.ranking.train"
     assert cli.COMMANDS["ranker-predict"].module == "fashionrec.ranking.predict"
+    assert cli.COMMANDS["ranker-dataset"].module == "fashionrec.industrial.ranking.dataset_materialization"
+
+
+def test_two_applications_expose_independent_command_surfaces() -> None:
+    assert "ranker-train" not in baseline_cli.COMMANDS
+    assert "ranker-dataset" not in baseline_cli.COMMANDS
+    assert industrial_cli.COMMANDS["ranker-dataset"].module.startswith("fashionrec.industrial")
+    assert baseline_cli.COMMANDS["pipeline"].module.startswith("fashionrec.baseline")
+    assert industrial_cli.COMMANDS["pipeline"].module.startswith("fashionrec.industrial")
 
 
 def test_pyproject_registers_one_console_script() -> None:  # 校验安装后的公开命令

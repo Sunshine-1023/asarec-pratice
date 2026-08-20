@@ -9,7 +9,7 @@ from typing import Any, Mapping  # 类型注解
 import yaml  # YAML 解析
 
 
-DEFAULT_EXPERIMENT_CONFIG = Path("configs/experiment.yaml")  # 默认实验配置路径
+DEFAULT_EXPERIMENT_CONFIG = Path("configs/baseline/experiment.yaml")  # 默认实验配置路径
 REQUIRED_TIERS = ("cold_start", "low", "medium", "high")  # 必须存在的四个活跃度分层
 PRIMARY_METRIC_DEFAULT = "MAP@12"  # 默认主指标
 
@@ -75,6 +75,7 @@ class RankingConfig:  # 学习排序协议；阶段 0 默认关闭
     library: str  # lightgbm 或 catboost
     objective: str  # 排序目标，默认 lambdarank
     top_k_for_training: int  # 排序训练使用的候选上限
+    train_snapshot_limit: int  # 最近多少个因果 train weekly snapshots
 
 
 @dataclass(frozen=True)  # 不可变数据类
@@ -252,6 +253,7 @@ def load_experiment_config(path: str | Path | None = None) -> ExperimentConfig: 
             ranking_raw, "objective", "ranking", ("lambdarank", "rankxendcg", "yetirank"), default="lambdarank"
         ),  # 目标结束
         top_k_for_training=_require_int(ranking_raw, "top_k_for_training", "ranking", default=500),  # 训练候选上限
+        train_snapshot_limit=_require_int(ranking_raw, "train_snapshot_limit", "ranking", default=4),
     )  # 排序协议结束
     evaluation = EvaluationConfig(  # 组装评估协议
         primary_metric=_require_str(evaluation_raw, "primary_metric", "evaluation", default=PRIMARY_METRIC_DEFAULT),  # 主指标
@@ -271,6 +273,12 @@ def load_experiment_config(path: str | Path | None = None) -> ExperimentConfig: 
         raise ExperimentConfigError("label.horizon_days must be >= 1")  # 抛出错误
     if ranking.top_k_for_training < candidate.final_top_k:  # 排序训练候选不能小于最终 K
         raise ExperimentConfigError("ranking.top_k_for_training must be >= candidate.final_top_k")  # 抛出错误
+    if ranking.train_snapshot_limit < 1:
+        raise ExperimentConfigError("ranking.train_snapshot_limit must be >= 1")
+    if ranking.enabled and label.target_mode != "next_basket":
+        raise ExperimentConfigError("ranking.enabled requires label.target_mode=next_basket")
+    if ranking.enabled and (ranking.library != "lightgbm" or ranking.objective != "lambdarank"):
+        raise ExperimentConfigError("ranking.enabled currently requires lightgbm + lambdarank")
     if model_selection.checkpoint_shortlist_size <= 0:
         raise ExperimentConfigError("model_selection.checkpoint_shortlist_size must be positive")
 

@@ -8,15 +8,31 @@ from pathlib import Path  # 路径
 
 @dataclass(frozen=True, slots=True)  # 不可变路径契约
 class RunArtifacts:  # 一次实验的全部产物目录
+    profile: str  # baseline / industrial 顶层命名空间
     run_id: str  # 唯一运行 ID
-    root: Path  # outputs/runs/<run_id>
+    root: Path  # outputs/runs/<profile>/<run_id>
 
     @classmethod
-    def from_root(cls, output_root: str | Path, run_id: str) -> "RunArtifacts":  # 构造路径但不创建目录
+    def from_root(
+        cls,
+        output_root: str | Path,
+        run_id: str,
+        *,
+        profile: str = "baseline",
+    ) -> "RunArtifacts":  # 构造路径但不创建目录
         clean_run_id = str(run_id).strip()  # 清洗运行 ID
         if not clean_run_id:  # 禁止空目录名
             raise ValueError("run_id must not be empty")  # 抛错
-        return cls(run_id=clean_run_id, root=Path(output_root) / clean_run_id)  # 返回路径集合
+        if clean_run_id in {".", ".."} or "/" in clean_run_id or "\\" in clean_run_id:
+            raise ValueError("run_id must be a single path-safe name")
+        clean_profile = str(profile).strip().lower()
+        if clean_profile not in {"baseline", "industrial"}:
+            raise ValueError("profile must be 'baseline' or 'industrial'")
+        return cls(
+            profile=clean_profile,
+            run_id=clean_run_id,
+            root=Path(output_root) / clean_profile / clean_run_id,
+        )  # 返回路径集合
 
     @property
     def data(self) -> Path:  # 本次运行的处理后数据，避免覆盖全局 data/processed

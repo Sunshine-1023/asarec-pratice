@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+
+import pytest
 
 from fashionrec.candidates.union import (
     UNION_SCHEMA_VERSION,
@@ -12,6 +15,7 @@ from fashionrec.candidates.union import (
 )
 from fashionrec.domain.candidates import Candidate
 from fashionrec.recall.generator import generate_candidates
+from fashionrec.recall import registry as recall_registry
 
 
 @dataclass
@@ -95,3 +99,31 @@ def test_union_top_k_caps_unique_items_but_keeps_all_channel_rows() -> None:
     union = union_candidates(rows, top_k_items_per_user=2)
     assert {row.item_id for row in union} == {"0000000001", "0000000002"}
     assert sum(1 for row in union if row.item_id == "0000000001") == 2  # 双通道证据都保留
+
+
+def test_registry_builds_only_requested_baseline_indexes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    inter = tmp_path / "train.inter"
+    inter.write_text("user_id:token\titem_id:token\ttimestamp:float\n", encoding="utf-8")
+    built: list[str] = []
+
+    def mark(name: str, value: object):
+        def builder(*_args: object, **_kwargs: object) -> object:
+            built.append(name)
+            return value
+
+        return builder
+
+    monkeypatch.setattr(recall_registry, "build_popular_index", mark("popular", object()))
+    monkeypatch.setattr(recall_registry, "build_user_cohort_lookup", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(recall_registry, "build_category_popular_index", mark("category_popular", object()))
+    monkeypatch.setattr(recall_registry, "build_item2item_index", mark("item2item", {}))
+    monkeypatch.setattr(recall_registry, "build_repurchase_index", mark("repurchase", object()))
+    monkeypatch.setattr(recall_registry, "build_style_index", mark("style", object()))
+    monkeypatch.setattr(recall_registry, "build_content_index", mark("content", object()))
+
+    channels = recall_registry.build_rule_channel_registry(
+        [inter],
+        channel_names=["popular", "category_popular", "item2item"],
+    )
+    assert list(channels) == ["popular", "category_popular", "item2item"]
+    assert built == ["popular", "category_popular", "item2item"]

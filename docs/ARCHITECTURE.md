@@ -7,22 +7,39 @@
 ## 分层与依赖方向
 
 ```text
-Makefile / fashionrec CLI（唯一公开入口）
+Makefile
         │
-        ▼
-fashionrec.pipeline + fashionrec.experiment（编排、配置、运行目录）
-        │
-        ├── fashionrec.data（预处理、时间切分、序列样本）
-        ├── fashionrec.recall（通道接口、索引、候选生成）
-        ├── fashionrec.candidates（候选并集与去重）
-        ├── fashionrec.ranking（Weighted RRF / LightGBM 特征边界）
-        └── fashionrec.evaluation（纯指标、权重搜索、报告）
+        ├── python -m fashionrec.baseline
+        └── python -m fashionrec.industrial
                 │
                 ▼
-          fashionrec.domain（ID 与 Candidate 契约）
+各应用独立的 data / models / recall / ranking / evaluation / pipeline
+        │
+        └── shared kernel（domain / interfaces / io / metrics / runtime）
 ```
 
-所有实现位于标准 `src/fashionrec/` 包中。CLI 延迟加载领域命令，底层模块不导入 CLI 或 pipeline；流水线内部的子进程也只调用 `python -m fashionrec <command>`，不依赖具体实现文件路径。
+对应目录：
+
+```text
+src/fashionrec/
+├── baseline/
+│   ├── data/ models/ recall/ ranking/ evaluation/
+│   └── pipeline/           # Baseline 独立 DAG 与 stage builders
+├── industrial/
+│   ├── data/ models/ recall/ ranking/ evaluation/
+│   └── pipeline/           # Industrial 独立 DAG 与 stage builders
+├── shared/
+│   ├── domain/             # ID 与 Candidate
+│   ├── interfaces/         # RecallChannel / Ranker 稳定边界
+│   ├── io/                 # 中立 CSV / Parquet I/O
+│   ├── metrics/            # MAP/Recall/NDCG 等纯数学实现
+│   └── runtime/            # CLI dispatch、argv、pipeline runner/contracts
+├── data/ recall/ ranking/ training/ evaluation/ candidates/
+│                           # 旧 import 兼容 facade，不承载正式实现
+└── pipeline/               # 旧 --profile 兼容 facade，不是正式入口
+```
+
+依赖方向固定为 `baseline|industrial application → shared kernel`。Baseline 与 Industrial 禁止互相导入，应用也禁止通过旧顶层 facade 间接调用另一套实现；shared 禁止反向导入任一应用。两套 DAG 的子进程分别调用 `python -m fashionrec.baseline <command>` 和 `python -m fashionrec.industrial <command>`。
 
 ## 核心数据契约
 
@@ -37,22 +54,31 @@ fashionrec.pipeline + fashionrec.experiment（编排、配置、运行目录）
 ## 正式流水线
 
 ```text
-数据准备
+baseline profile
+  数据准备
   → SASRecF 训练
   → valid 用户周 MAP@12 选择 checkpoint
   → SASRecF valid/test 召回
-  → 规则召回 + 四路候选物化
+  → 三路规则召回 + SASRecF 四路候选物化
   → valid 权重搜索
   → Weighted RRF valid/test 排序
   → 离线指标与运行清单
+
+industrial profile
+  events / baskets / next-basket labels / PIT user features
+  → 独立 SASRecF 训练与 valid/test 扩展多路候选
+  → 最近 N 个因果 train 快照规则候选
+  → 全候选 cross features + train/valid/test ranking parquet
+  → LightGBM LambdaRank 训练与打分
+  → next-basket RRF vs LambdaRank valid/test 对照
 ```
 
-`fashionrec pipeline` 首先解析一次 `configs/experiment.yaml`，创建 `RunContext`，然后把同一份参数和同一个运行目录传给全部阶段。`max_user_history` 同时约束候选生成、用户分层和已购过滤；valid 与 test 排序同时读取 valid 搜索得到的同一权重文件。正式模式默认 `strict=True`：候选文件、序列召回等关键依赖缺失时直接失败，不再静默换模型或使用空通道。
+两个应用入口分别创建固定 profile 的 `RunContext`，无需通过 `--profile` 选择。`baseline` 与 `industrial` 即使使用相同 run-id，也写入不同顶层命名空间。正式模式默认 `strict=True`：候选文件、序列召回等关键依赖缺失时直接失败；同一应用/run-id 的配置哈希变化也会拒绝续跑。
 
 单次运行目录：
 
 ```text
-outputs/runs/<run_id>/
+outputs/runs/<profile>/<run_id>/
 ├── resolved_config.json
 ├── manifest.json
 ├── checkpoints/sasrecf/
@@ -69,20 +95,23 @@ outputs/runs/<run_id>/
 
 ## 排序层
 
-当前等价基线是 `WeightedRRFRanker`。它实现通用 `Ranker` 接口，离线评估不再直接拥有融合算法。
+baseline 的固定排序器是 `WeightedRRFRanker`。industrial 同时训练 `LightGBMRanker`，但保留同一候选集上的 RRF 作为对照。
 
-`src/fashionrec/ranking/features.py` 将候选并集透视为“一用户一商品”表，输出用户历史长度、通道覆盖数、最佳通道排名、最大通道分、各通道 `present / score / rank`、训练标签，以及 LightGBM LambdaRank 所需的用户 group sizes。
+`src/fashionrec/industrial/ranking/features.py` 将候选并集透视为“一用户一商品”表，输出用户历史长度、通道覆盖数、最佳通道排名、最大通道分、各通道 `present / score / rank`、训练标签，以及 LightGBM LambdaRank 所需的用户 group sizes；模型训练与推理实现位于 `industrial/models/lambdarank/`。
 
-因此后续接入 `lightgbm.LGBMRanker(objective="lambdarank")` 时，只需新增模型训练与预测适配器，不需要改召回、候选或指标模块。
+industrial 的 `ranker-dataset` 会把固定候选、PIT 用户/商品/交叉特征和 next-basket 标签拼成 train/valid/test parquet，再由 `ranker-train` 和 `ranker-predict` 消费。
 
 ## 公开入口
 
 正式实验统一使用 Makefile：
 
 ```bash
-make pipeline WITH_FILTER=1
+make baseline WITH_FILTER=1
+make industrial WITH_FILTER=1
 ```
 
-`Makefile` 只把目标和变量翻译为 `fashionrec pipeline` 参数，不复制阶段顺序或产物路径。分阶段运行必须提供同一个 `RUN_ID`，例如 `make train RUN_ID=exp-001` 和 `make downstream RUN_ID=exp-001`。调试旧产物时可设置 `STRICT=0`；为了避免不同实验串用文件，正式结果不要从 `outputs/recommendations` 或 `outputs/evaluation` 手工拼接。
+`Makefile` 根据 `PROFILE` 选择一个应用入口，但不再调用通用 `fashionrec pipeline --profile`。分阶段运行必须固定 `PROFILE` 和 `RUN_ID`，例如 `make train PROFILE=industrial RUN_ID=exp-001`。分阶段目标会跳过 ranker 执行，但不会把 Industrial 的数据/标签协议降级成 Baseline。
 
-Python 对外只提供 `fashionrec` 一个 console script 和 `python -m fashionrec` 一个模块入口。命令实现仍按 data、training、recall、ranking、evaluation 与 pipeline 分层存放，但不再暴露根目录启动脚本。
+正式应用入口是 `python -m fashionrec.baseline` 与 `python -m fashionrec.industrial`。顶层 `python -m fashionrec` 保留 profile-data 和旧命令兼容，不再承担两条正式训练链的选择职责。
+
+两套应用分别拥有 `configs/baseline/{experiment.yaml,models/sasrecf.yaml}` 与 `configs/industrial/{experiment.yaml,models/sasrecf.yaml}`。`configs/experiment.yaml` 和根目录模型 YAML 仅作为旧调用兼容文件保留。

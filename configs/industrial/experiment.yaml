@@ -1,0 +1,53 @@
+# Next-basket/PIT/multi-recall/LightGBM LambdaRank industrial experiment profile.
+experiment:
+  name: fashionrec_industrial
+  seed: 2026
+
+data:
+  history_weeks: 26
+  valid_weeks: 1
+  test_weeks: 1
+  backtest_windows: 3
+  snapshot_frequency: weekly
+  max_user_history: 200
+  min_user_purchases: 5
+  keep_full_item_universe: true
+  deduplicate_user_day_item: true
+
+label:
+  horizon_days: 7
+  target_mode: next_basket
+  include_repeat_label: true
+  include_new_to_user_label: true
+
+model_selection:
+  checkpoint_shortlist_size: 5
+
+candidate:
+  per_channel_top_k: 200
+  popular_top_k: 200
+  category_popular_top_k: 200
+  item2item_top_k: 200
+  sequence_top_k: 200
+  repurchase_top_k: 200
+  style_top_k: 200
+  content_top_k: 200
+  union_top_k: 500
+  union_feature_version: hm.candidate_union.v2
+  final_top_k: 12
+
+ranking:
+  enabled: true
+  library: lightgbm
+  objective: lambdarank
+  top_k_for_training: 500
+  train_snapshot_limit: 4
+
+evaluation:
+  primary_metric: MAP@12
+  protocol: offline_candidate_ranking
+  activity_tiers:
+    cold_start: [0, 0]
+    low: [1, 2]
+    medium: [3, 9]
+    high: [10, null]

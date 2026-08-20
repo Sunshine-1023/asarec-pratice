@@ -1,0 +1,2 @@
+"""Industrial recall application layer."""
+

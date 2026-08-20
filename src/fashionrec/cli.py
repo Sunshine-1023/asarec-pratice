@@ -17,7 +17,7 @@ class CommandSpec:  # 单个子命令定义
 
 
 COMMANDS: dict[str, CommandSpec] = {  # 统一公开命令表
-    "pipeline": CommandSpec("fashionrec.pipeline.command", "Run the complete formal pipeline"),  # 全流程
+    "pipeline": CommandSpec("fashionrec.pipeline.command", "Legacy profile pipeline compatibility entry"),
     "data": CommandSpec("fashionrec.data.command", "Prepare causal train/valid/test data"),  # 数据准备
     "profile-data": CommandSpec("fashionrec.data.profile", "Profile raw transactions/customers/articles"),  # raw 数据体检
     "train": CommandSpec(  # SASRecF 训练
@@ -39,6 +39,10 @@ COMMANDS: dict[str, CommandSpec] = {  # 统一公开命令表
         "Materialize rule and sequence candidates",  # 帮助说明
     ),  # 候选命令结束
     "weights": CommandSpec("fashionrec.evaluation.weight_search", "Search fusion weights on valid"),  # 搜权
+    "ranker-dataset": CommandSpec(
+        "fashionrec.industrial.ranking.dataset_materialization",
+        "Build causal LambdaRank parquet tables",
+    ),
     "ranker-train": CommandSpec("fashionrec.ranking.train", "Train LightGBM LambdaRank"),  # 学习排序训练
     "ranker-predict": CommandSpec("fashionrec.ranking.predict", "Score candidates with LambdaRank"),  # 学习排序推理
     "evaluate": CommandSpec("fashionrec.evaluation.offline_eval", "Evaluate fixed candidates and weights"),  # 评估

@@ -1,63 +1,40 @@
-"""Recall modules for multi-channel recommendation."""  # 多通道推荐的召回模块
+"""Compatibility aliases for recall implementations now owned by Industrial."""
 
-from .category_popular import (  # 从类别热门召回模块导入
-    CATEGORY_POPULAR_RECALL_TOP_K,  # 类别热门召回 Top-K 默认值
-    build_category_popular_index,  # 构建类别热门索引
-    recall_category_popular,  # 类别热门召回函数
-)  # 类别热门召回导入结束
-from .item2item import (  # item2item 共现召回
-    DEFAULT_SIMILARITY_MODE,
-    ITEM2ITEM_RECALL_TOP_K,
-    ITEM2ITEM_SCHEMA_VERSION,
-    SIMILARITY_MODES,
-    build_item2item_index,
-    recall_item2item,
-)  # 导入结束
-from .content import CONTENT_RECALL_TOP_K, ContentIndex, build_content_index, recall_content  # 内容召回
-from .repurchase import REPURCHASE_RECALL_TOP_K, RepurchaseIndex, build_repurchase_index, recall_repurchase  # 复购
-from .style import STYLE_RECALL_TOP_K, StyleIndex, build_style_index, recall_style  # 款式
-from .popular import (  # 热门召回
-    POPULAR_RECALL_TOP_K,
-    PopularIndex,
-    build_popular_index,
-    build_user_cohort_lookup,
-    recall_popular,
-)  # 导入结束
-
-__all__ = [  # 定义模块公开接口
-    "POPULAR_RECALL_TOP_K",  # 热门召回 Top-K 默认值
-    "CATEGORY_POPULAR_RECALL_TOP_K",  # 类别热门召回 Top-K 默认值
-    "ITEM2ITEM_RECALL_TOP_K",  # item2item 召回 Top-K 默认值
-    "ITEM2ITEM_SCHEMA_VERSION",  # 索引语义
-    "DEFAULT_SIMILARITY_MODE",  # 默认相似度变体
-    "SIMILARITY_MODES",  # 全部变体
-    "build_popular_index",  # 热门召回索引构建
-    "PopularIndex",  # 热门索引结构
-    "build_user_cohort_lookup",  # 冷启动 cohort 查表
-    "recall_popular",  # 热门召回
-    "build_category_popular_index",  # 类别热门索引构建
-    "recall_category_popular",  # 类别热门召回
-    "build_item2item_index",  # item2item 索引构建
-    "recall_item2item",  # item2item 召回
-    "REPURCHASE_RECALL_TOP_K",  # 复购 Top-K
-    "RepurchaseIndex",
-    "build_repurchase_index",
-    "recall_repurchase",
-    "STYLE_RECALL_TOP_K",  # 款式 Top-K
-    "StyleIndex",
-    "build_style_index",
-    "recall_style",
-    "CONTENT_RECALL_TOP_K",  # 内容 Top-K
-    "ContentIndex",
-    "build_content_index",
-    "recall_content",
-    "export_sasrec_recall",  # SASRec 召回导出
-]  # 公开接口列表结束
+from importlib import import_module
+import sys
 
 
-def __getattr__(name: str):  # 延迟导入依赖 RecBole 的模块
-    if name == "export_sasrec_recall":  # 若请求 SASRec 召回导出函数
-        from .sasrec_recall import export_sasrec_recall  # 延迟导入避免启动时加载 RecBole
+_ALIASES = {
+    "base": "fashionrec.industrial.recall.base",
+    "category_popular": "fashionrec.industrial.recall.category_popular",
+    "content": "fashionrec.industrial.recall.content",
+    "generator": "fashionrec.industrial.recall.generator",
+    "item2item": "fashionrec.industrial.recall.item2item",
+    "popular": "fashionrec.industrial.recall.popular",
+    "registry": "fashionrec.industrial.recall.channel_registry",
+    "repurchase": "fashionrec.industrial.recall.repurchase",
+    "rule_recall_export": "fashionrec.industrial.recall.service",
+    "style": "fashionrec.industrial.recall.style",
+    "window_scores": "fashionrec.industrial.recall.window_scores",
+}
 
-        return export_sasrec_recall  # 返回导出函数
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")  # 未知属性则抛出异常
+for _name, _target in _ALIASES.items():
+    _module = import_module(_target)
+    sys.modules[f"{__name__}.{_name}"] = _module
+    globals()[_name] = _module
+
+from fashionrec.industrial.recall.category_popular import CATEGORY_POPULAR_RECALL_TOP_K, build_category_popular_index, recall_category_popular
+from fashionrec.industrial.recall.content import CONTENT_RECALL_TOP_K, ContentIndex, build_content_index, recall_content
+from fashionrec.industrial.recall.item2item import DEFAULT_SIMILARITY_MODE, ITEM2ITEM_RECALL_TOP_K, ITEM2ITEM_SCHEMA_VERSION, SIMILARITY_MODES, build_item2item_index, recall_item2item
+from fashionrec.industrial.recall.popular import POPULAR_RECALL_TOP_K, PopularIndex, build_popular_index, build_user_cohort_lookup, recall_popular
+from fashionrec.industrial.recall.repurchase import REPURCHASE_RECALL_TOP_K, RepurchaseIndex, build_repurchase_index, recall_repurchase
+from fashionrec.industrial.recall.style import STYLE_RECALL_TOP_K, StyleIndex, build_style_index, recall_style
+__all__ = [name for name in globals() if not name.startswith("_") and name not in {"import_module", "sys"}]
+
+
+def __getattr__(name: str):
+    if name == "export_sasrec_recall":
+        from fashionrec.industrial.models.sasrecf.recall_service import export_sasrec_recall
+
+        return export_sasrec_recall
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

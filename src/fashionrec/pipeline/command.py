@@ -9,7 +9,8 @@ import time  # 导入时间模块以统计步骤耗时
 from pathlib import Path  # 导入路径处理类
 
 from fashionrec.experiment.context import create_run_context  # 单次运行上下文
-from fashionrec.pipeline.orchestrator import PipelineOptions, build_pipeline_steps  # 纯编排计划
+from fashionrec.shared.runtime.contracts import PipelineOptions  # 公共流水线参数契约
+from fashionrec.pipeline.registry import build_pipeline_steps  # 按 run profile 路由到独立 DAG
 
 ROOT = Path.cwd()  # 命令从当前项目工作目录解析配置和数据
 
@@ -47,9 +48,9 @@ def main(argv: list[str] | None = None) -> None:  # 命令行入口：组装并�
         help="Reuse the run's existing sasrecf_selected.pth instead of re-scoring valid",
     )
     parser.add_argument("--skip-recall", action="store_true", help="Skip step 3 (SASRecF recall export)")  # 跳过步骤 3 召回导出
-    parser.add_argument("--skip-candidates", action="store_true", help="Skip four-channel candidate materialization")
+    parser.add_argument("--skip-candidates", action="store_true", help="Skip profile-specific candidate materialization")
     parser.add_argument("--skip-weight-search", action="store_true", help="Skip step 5")  # 跳过步骤 5 权重搜索
-    parser.add_argument("--skip-ranker", action="store_true", help="Skip LightGBM LambdaRank train/predict")
+    parser.add_argument("--skip-ranker", action="store_true", help="Skip LambdaRank dataset/train/predict execution")
     parser.add_argument(  # 定义 --skip-valid-eval 参数
         "--skip-valid-eval",  # 参数名
         action="store_true",  # 布尔开关
@@ -69,10 +70,16 @@ def main(argv: list[str] | None = None) -> None:  # 命令行入口：组装并�
     parser.add_argument(  # 统一实验协议配置
         "--experiment-config",  # 参数名
         type=Path,  # 路径类型
-        default=Path("configs/experiment.yaml"),  # 默认实验 YAML
-        help="Unified experiment protocol YAML (passed to data prep; default: configs/experiment.yaml)",  # 帮助文本
+        default=Path("configs/baseline/experiment.yaml"),  # 默认实验 YAML
+        help="Unified experiment protocol YAML (passed to data prep; default: configs/baseline/experiment.yaml)",  # 帮助文本
     )  # --experiment-config 结束
     parser.add_argument("--run-id", type=str, default=None, help="Reuse a specific run-scoped artifact directory")
+    parser.add_argument(
+        "--profile",
+        choices=["auto", "baseline", "industrial"],
+        default="auto",
+        help="Isolated pipeline profile; must match ranking.enabled in the experiment config",
+    )
     parser.add_argument("--output-root", type=Path, default=Path("outputs/runs"), help="Run artifact root")
     parser.add_argument("--no-strict", action="store_true", help="Compatibility mode; formal runs are strict by default")
     args = parser.parse_args(argv)  # 解析显式命令参数
@@ -81,6 +88,7 @@ def main(argv: list[str] | None = None) -> None:  # 命令行入口：组装并�
         config_path=args.experiment_config,
         output_root=args.output_root,
         run_id=args.run_id,
+        profile=args.profile,
         strict=not args.no_strict,
         initialize=True,
     )
