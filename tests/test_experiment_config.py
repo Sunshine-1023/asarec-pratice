@@ -80,6 +80,7 @@ def test_default_experiment_config_loads() -> None:  # 默认 YAML 能加载且�
     assert config.ranking.objective == "lambdarank"  # 默认目标
     assert config.ranking.top_k_for_training == 500  # 排序训练候选
     assert config.ranking.train_snapshot_limit == 4
+    assert config.ranking.use_sequence_features is False
     assert config.evaluation.primary_metric == "MAP@12"  # 主指标
     assert set(config.evaluation.activity_tiers) == {"cold_start", "low", "medium", "high"}  # 四层都在
     assert config.evaluation.activity_tiers["high"] == (10, None)  # 高活跃无上界
@@ -104,6 +105,7 @@ def test_optional_fields_have_defaults(tmp_path: Path) -> None:  # 缺省字段�
     assert config.ranking.objective == "lambdarank"  # 目标默认
     assert config.ranking.top_k_for_training == 500  # 训练候选默认
     assert config.ranking.train_snapshot_limit == 4
+    assert config.ranking.use_sequence_features is False
 
 
 def test_missing_required_field_raises(tmp_path: Path) -> None:  # 缺必填字段报错

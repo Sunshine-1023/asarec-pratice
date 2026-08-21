@@ -173,6 +173,18 @@ def test_compare_ranker_rejects_major_activity_tier_map_drop() -> None:
     assert "cold_start" in report["reason"]
 
 
+def test_compare_ranker_requires_primary_map_improvement() -> None:
+    even = {tier: 0.20 for tier in REQUIRED_TIERS}
+    baseline = _ranker_variant("fusion_valid_search_weights", 0.20, even)
+    candidate = _ranker_variant("lambdarank", 0.19, even)
+    candidate["overall"]["Recall@12"] = 0.30
+    report = compare_ranker_variants([baseline, candidate])
+    assert report["overall_improved"] is True
+    assert report["primary_metric_improved"] is False
+    assert report["replace_default_ranker"] is False
+    assert "MAP@12" in report["reason"]
+
+
 def test_compare_ranker_skips_lambdarank_without_replacing_default() -> None:
     even = {tier: 0.20 for tier in REQUIRED_TIERS}
     variants = [

@@ -12,6 +12,7 @@ from fashionrec.industrial.pipeline.stages import (
     evaluation_step,
     ranker_dataset_step,
     ranker_predict_step,
+    ranker_sequence_step,
     ranker_train_step,
     recall_step,
     train_step,
@@ -34,6 +35,7 @@ def build_pipeline_steps(
     for split in ("valid", "test"):
         append(steps, recall_step(context, python_executable, options, split))
         append(steps, candidate_step(context, python_executable, options, split))
+    append(steps, ranker_sequence_step(context, python_executable, options))
     append(steps, ranker_dataset_step(context, python_executable, options))
     append(steps, weight_step(context, python_executable, options))
     append(steps, ranker_train_step(context, python_executable, options))

@@ -33,6 +33,9 @@ def test_two_applications_expose_independent_command_surfaces() -> None:
     assert "ranker-train" not in baseline_cli.COMMANDS
     assert "ranker-dataset" not in baseline_cli.COMMANDS
     assert industrial_cli.COMMANDS["ranker-dataset"].module.startswith("fashionrec.industrial")
+    assert industrial_cli.COMMANDS["ranker-sequence"].module == (
+        "fashionrec.industrial.models.sasrecf.ranking_features"
+    )
     assert baseline_cli.COMMANDS["pipeline"].module.startswith("fashionrec.baseline")
     assert industrial_cli.COMMANDS["pipeline"].module.startswith("fashionrec.industrial")
 

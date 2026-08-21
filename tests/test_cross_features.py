@@ -176,6 +176,24 @@ def test_build_cross_feature_table_primary_keys(tmp_path: Path) -> None:  # 主�
     assert table.iloc[0]["item_global_purchase_count_7d"] == 0.0  # 7 日窗不含 9/1
 
 
+def test_cohort_features_use_full_customer_cohort_not_candidate_batch(tmp_path: Path) -> None:
+    articles = _articles(
+        tmp_path / "articles.csv",
+        [{"article_id": "0000000001", "product_code": "1", "department_name": "A", "colour_group_name": "Blue"}],
+    )
+    meta = load_item_metadata(articles)
+    events = _events(
+        [
+            {"user_id": "u1", "item_id": "0000000001", "date": "2020-09-10", "quantity": 2, "mean_price": 0.02, "sales_channel_mode": 1},
+            {"user_id": "u2", "item_id": "0000000001", "date": "2020-09-10", "quantity": 3, "mean_price": 0.02, "sales_channel_mode": 1},
+        ]
+    )
+    pairs = pd.DataFrame([{"user_id": "u1", "item_id": "0000000001", "as_of_date": "2020-09-10"}])
+    cohorts = pd.DataFrame({"user_id": ["u1", "u2"], "age_bucket": ["25-34", "25-34"]})
+    table = build_cross_feature_table(pairs, events, meta, user_cohorts=cohorts)
+    assert float(table.iloc[0]["item_cohort_purchase_count_7d"]) == 5.0
+
+
 def test_assert_cross_features_ignore_future_events(tmp_path: Path) -> None:  # 防泄漏
     articles = _articles(
         tmp_path / "articles.csv",

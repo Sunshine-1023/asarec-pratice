@@ -145,3 +145,42 @@
 - 清理后 Baseline 从约 9,468 行降至 5,488 行，减少 3,980 行（约 42.0%）。规范化相似度 ≥95% 的同路径文件从 55 组降至 31 组，覆盖行数从约 9,123 降至 3,656；字节级完全相同从 12 组/1,560 行降至 8 组/697 行。
 - 仍保留的重复主要是两应用独立拥有的 SASRecF、基础召回、RRF 与稳定基础工具；是否进一步下沉 shared 属于新的架构选择，不应在“算法物理隔离”约束下自动执行。
 - 验证：完整 `make check` 通过，254 项测试全部收集并执行成功，Baseline/Industrial/旧统一 CLI smoke checks 通过；`git diff --check`、双 profile Make dry-run 和 import 边界检查通过。未运行 3.2GB raw 的真实全链训练。
+
+## 2026-08-21 清理后双链路复审（进行中）
+
+- Baseline 默认 DAG 仍是 10 步：data → train → checkpoint selection → valid recall/candidates → test recall/candidates → valid weight search → valid/test evaluation。所有子命令均指向 `fashionrec.baseline`。
+- Industrial 默认 DAG 仍是 14 步：data → train → checkpoint selection → valid/test recall+candidates → ranking dataset → next-basket RRF weight search → LambdaRank train → valid/test predict → valid/test comparison evaluation。所有子命令均指向 `fashionrec.industrial`。
+- Baseline 配置已收缩到本链实际消费字段；Industrial 保留购物篮/PIT/扩展召回/LambdaRank 全协议字段。两者都是 26+1+1 周、每通道 200、union 500、最终 Top-12，但标签和排序协议不同。
+- 编排层的文件依赖表面闭环：Baseline candidates 消费本 run SASRecF recall，weights/evaluate 消费本 run candidates；Industrial ranker dataset 消费本 run data/candidates，train/predict/evaluate 依次消费本 run ranking artifacts。
+- Industrial 训练候选仍只由 `ALL_CHANNELS` 的六路规则召回生成；valid/test 候选直接读取正式候选 CSV，并包含额外 SASRecF 通道。训练表固定声明 `ALL_CHANNELS + sasrecf`，因此 train 的 `sasrecf_present/score/rank` 为默认/常量，valid/test 才出现真实值，存在明确的 LambdaRank train-serving 特征分布偏移。
+- LambdaRank 当前仅自动选择 numeric dtype 特征；token 类类别字段不会进入模型，numeric 编码的 ID/类别则会被当作连续数值。训练只删除少于 2 个候选的 group，没有删除零正例 group，也没有常量列或跨 split 漂移校验。
+- Industrial cross feature 的 cohort 历史构造只遍历当前 `pairs` 批次里的用户，再从全局历史中过滤这些用户；因此 `item_cohort_purchase_count_*` 不是整个 age bucket 的历史热度，而是“当前候选批次中同桶用户”的热度，会随训练/评估用户集合变化。
+- Industrial valid/test 规则召回和 RRF 活跃度仍通过 `.inter` 的最近 N 行构造 `user_history`。该函数不按 user-day-item 去重，也不按 basket 计数；是否污染各通道取决于底层召回器是否再次做日级聚合，需逐通道确认。
+- SASRecF 数据准备本身是正确的购物日因果语义：先按 user-day-item 去重；同日多个目标共享完全相同的历史；训练仅在整日结束后推进；valid 周内不推进，valid 完成后整体加入 test 历史。因此“同日伪序列”已从两套 SASRecF 路径中消除。
+- Industrial next-basket 标签按未来 7 天的 user-item 集合聚合，数量只保存在 `label_quantity`，MAP/Recall/NDCG 的 actual 使用 set，不会把同 SKU 数量重复计为多次命中；valid 权重搜索与 valid/test 最终评估都显式读取同一 run 的 labels，且搜权入口强制只允许 valid。
+- 规则召回仍未完全采用购物篮协议：用户种子历史是最近 N 个 `.inter` 行；repurchase 的 count 也是交易行数；popular/category/style/content 的流行度统计也按交易行计数。Item2Item 默认 cosine/IUF 会对用户全窗口 SKU 去重，但其 `sequential` 变体仍可能把同日商品的确定性排序当转移顺序。数量作为购买强度可有业务意义，但当前与新标签的“去重篮子”语义不一致，且重复行会挤占最近种子/活跃度长度。
+- 候选 union 500 的截断顺序是通道覆盖数优先、再最佳通道 rank、再最高原始 score；这能偏好多路共识，但可能挤掉强单通道独占候选，需要以候选覆盖/独占命中诊断验证，不能视为天然最优。
+- Industrial 的 RRF 搜权只优化 SASRecF/Popular/CategoryPopular/Item2Item 四路，Repurchase/Style/Content 由活跃度模板追加固定辅助权重；流程可运行，但新增通道没有通过 valid 联合寻优。
+- LambdaRank replacement gate 只要 MAP/Recall/NDCG 任一项提升且没有分层 MAP 相对下降超过 5%，就会给出 `replace_default_ranker=true`；它没有要求主指标 MAP@12 本身提升，也没有约束其他总体指标恶化。不过该 gate 当前只写建议，正式输出仍保持 RRF，不会自动切换。
+- 全量运行仍未验证：raw 约 4.1GB、transactions CSV 约 3.2GB；ranking materialization 一次性读取 events/snapshots/labels/user/customer/item parquet，构建全量 candidate pairs 与 cross features，并对每个候选执行 Python 循环；train/valid parquet 又被 LightGBM 一次性读入。微型闭环通过不能证明 500 候选/用户的全量链可在现有机器内存和时限内完成。
+- 两链预处理不会在切分前按未来总购买数筛用户或裁剪历史；可选 Top-30k 商品过滤也只在 train 窗拟合后冻结并应用到 valid/test，未发现该处标签泄漏。
+- 本轮验证：70 项定向回归通过；完整 `make check` 通过，254 项测试全部收集执行成功且所有 Baseline/Industrial/兼容 CLI smoke checks 通过；双应用 dry-run、跨应用 import 扫描、`git diff --check` 通过。没有运行 3.2GB raw 的真实全链训练。
+- 2026-08-21 修复结果：Industrial 新增 `data/basket_history.py` 作为唯一交易行→购物篮历史适配；`ranking/fusion.py`、`ranking/dataset_materialization.py` 均改用它，复购按购买日次数统计。
+- 2026-08-21 修复结果：cohort 交叉特征使用完整 customer cohort；LambdaRank 训练/valid/test 统一六路规则候选，SASRecF 仍保留在 RRF 候选链但不再作为只有 valid/test 才有值的 ranker 特征；LambdaRank 排除零正例 group，并持久化 token 特征编码表。
+- 2026-08-21 最终收口：Popular、CategoryPopular、Style、Content 的热度统计均先按 user-day-item 去重；Repurchase 的频次改为购买日次数。同日购买数量不会再通过重复交易行改变 Industrial 的热度或复购分数。
+- 2026-08-21 最终收口：LambdaRank 若 valid 过滤零正例 group 后为空，会关闭该次 early-stopping eval；训练仍可用有效 train group 完成。token 映射被冻结到 schema，未知/缺失类别统一编码为 0。
+- 2026-08-21 最终验证：261 项测试、两应用与兼容 CLI smoke、跨应用 import、编译与 diff whitespace 检查均通过。该结论仍是代码/微型数据闭环，不代表 3.2GB 原始交易数据上的全量训练耗时、内存和指标已经实测。
+- 2026-08-21 SASRecF→LambdaRank 设计：现有正式 SASRecF checkpoint 使用完整 train 并只导出 valid/test；不能为更早 train snapshot 打分。正确接入必须为每个被 LambdaRank 消费的 train snapshot 构建截止 as-of 的序列 benchmark、独立训练 checkpoint，并给该快照用户导出 SASRecF 候选/分数。valid/test 继续消费正式 checkpoint，从而三类表都有同名 `sasrecf_present/score/rank` 且时间因果成立。
+- 2026-08-21 SASRecF→LambdaRank 实现：Industrial 配置默认 `use_sequence_features=true`、最近 4 个快照、每快照最多 15 epochs、内部 7 天 validation。每个快照模型的数据词表、训练、验证和推理历史都不包含 as-of 之后事件。
+- 2026-08-21 SASRecF→LambdaRank 实现：训练快照候选并集现在包含六路规则召回 + 当期 SASRecF；valid/test 保留正式候选中的 SASRecF。LightGBM 因而能学习序列通道的 present、原始 score、rank 以及其对 channel_count/best_rank/max_score 的贡献。
+- 2026-08-21 资源影响：默认会在正式 SASRecF 之外额外训练 4 个快照 SASRecF，计算成本显著上升；代码测试通过不等于 3.2GB 全量数据已完成这些模型训练或已证明指标提升。
+
+## 2026-08-21 Industrial 单 SASRecF 决策
+
+- 用户明确不要快照级 SASRecF，选择“简单复用”：完整 train 训练并经正式 valid 选出的唯一 checkpoint，同时用于正式 valid/test 召回和历史 LambdaRank train 快照特征。
+- 历史 train 快照推理仍按各自 as-of 截断用户输入序列，避免把未来购买直接塞进模型输入；但模型参数、商品词表和 checkpoint 选择看过该快照之后的数据，因此该协议不是严格 PIT，离线 LambdaRank 指标可能虚高。
+- 实现应只加载一次 checkpoint、循环多个 train snapshot 推理；不再创建 `sasrecf_ranker_snapshots` checkpoint 目录，也不保留 `sequence_snapshot_epochs/sequence_validation_days` 等快照训练配置。
+- 产物报告必须记录 `causal_model=false`、`history_as_of=true` 和唯一 `model_file`，避免后续把该实验误认为无泄漏工业评估。
+- 最终实现只保留 `checkpoints/sasrecf/` shortlist 与 `checkpoints/sasrecf_selected.pth`；不存在 `sasrecf_ranker_snapshots`。valid/test 和历史 ranker train 证据都引用同一个 selected checkpoint。
+- 历史 train 快照只重建内存中的 item sequence 并执行 full-sort 推理，不再为每个快照创建 RecBole dataset 或训练模型。训练成本从正式模型 + 4 个快照模型降为正式模型 1 次，仍需承担 4 个快照的推理成本。
+- 当前代码验证证明单模型契约和表结构闭环，不证明实际指标提升；由于用户选择简单复用，任何 LambdaRank 离线提升都必须同时展示非严格 PIT 警告。

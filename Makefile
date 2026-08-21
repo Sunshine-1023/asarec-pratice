@@ -137,6 +137,7 @@ check: test
 	$(INDUSTRIAL_CLI) recall --help >/dev/null
 	$(INDUSTRIAL_CLI) candidates --help >/dev/null
 	$(INDUSTRIAL_CLI) weights --help >/dev/null
+	$(INDUSTRIAL_CLI) ranker-sequence --help >/dev/null
 	$(INDUSTRIAL_CLI) ranker-dataset --help >/dev/null
 	$(INDUSTRIAL_CLI) ranker-train --help >/dev/null
 	$(INDUSTRIAL_CLI) ranker-predict --help >/dev/null

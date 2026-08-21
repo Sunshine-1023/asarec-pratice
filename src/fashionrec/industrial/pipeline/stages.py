@@ -163,7 +163,7 @@ def ranker_dataset_step(context: RunContext, python: str, options: PipelineOptio
         return None
     artifacts = context.artifacts
     return PipelineStep(
-        "构建 LambdaRank 因果训练表",
+        "构建 LambdaRank 训练表（SASRecF 简单复用）",
         command(
             python,
             "ranker-dataset",
@@ -177,10 +177,33 @@ def ranker_dataset_step(context: RunContext, python: str, options: PipelineOptio
             str(artifacts.ranking),
             "--diagnostics-dir",
             str(artifacts.evaluation),
+            "--sequence-feature-dir",
+            str(artifacts.ranking / "sasrecf_model_reuse"),
             "--articles-path",
             "data/raw/articles.csv",
             "--customers-path",
             "data/raw/customers.csv",
+        ),
+    )
+
+
+def ranker_sequence_step(context: RunContext, python: str, options: PipelineOptions) -> PipelineStep | None:
+    if options.skip_ranker or not context.config.ranking.use_sequence_features:
+        return None
+    artifacts = context.artifacts
+    return PipelineStep(
+        "复用唯一 SASRecF 生成 LambdaRank 序列证据",
+        command(
+            python,
+            "ranker-sequence",
+            "--experiment-config",
+            str(context.config.source_path),
+            "--data-dir",
+            str(artifacts.data),
+            "--model-file",
+            str(artifacts.selected_checkpoint_file("sasrecf")),
+            "--output-dir",
+            str(artifacts.ranking / "sasrecf_model_reuse"),
         ),
     )
 

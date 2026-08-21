@@ -25,7 +25,7 @@ from fashionrec.industrial.recall.window_scores import (  # 共享多窗口 rank
     filter_interactions_as_of,
     rank_score_items,
 )
-from fashionrec.shared.domain.ids import canonical_item_id
+from fashionrec.shared.domain.ids import canonical_item_id, canonical_user_id
 
 
 DEFAULT_INTER_PATH = Path("data/processed/hm/hm.train.inter")  # 默认训练集交互文件
@@ -55,13 +55,17 @@ def _load_interactions(*inter_paths: str | Path) -> pd.DataFrame:  # 读取交�
         df = pd.read_csv(  # 读取商品、时间戳
             path,  # 交互文件路径
             sep="\t",  # 制表符分隔
-            usecols=["item_id:token", "timestamp:float"],  # 仅读取商品 ID 与时间戳列
+            usecols=["user_id:token", "item_id:token", "timestamp:float"],
+            dtype={"user_id:token": "string", "item_id:token": "string"},
         )  # 结束 read_csv 调用
+        df["user_id:token"] = df["user_id:token"].map(canonical_user_id)
         df["item_id:token"] = df["item_id:token"].map(canonical_item_id)  # 统一为 10 位商品 ID
         df["date"] = pd.to_datetime(df["timestamp:float"], unit="s").dt.normalize()  # 转自然日
-        frames.append(df[["item_id:token", "date"]])  # 只保留所需列
+        frames.append(df[["user_id:token", "item_id:token", "date"]])
 
-    return pd.concat(frames, ignore_index=True)  # 合并全部交互
+    return pd.concat(frames, ignore_index=True).drop_duplicates(
+        ["user_id:token", "item_id:token", "date"], keep="first"
+    )  # 同日同 SKU 只计一次购买事件
 
 
 def _load_item_categories(  # 加载商品到类别字段的映射

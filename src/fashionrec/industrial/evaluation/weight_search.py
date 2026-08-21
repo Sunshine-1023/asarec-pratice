@@ -15,7 +15,11 @@ if __package__ is None or __package__ == "":  # 若以脚本方式直接运行
     if str(project_root) not in sys.path:  # 若根目录不在搜索路径中
         sys.path.insert(0, str(project_root))  # 注入项目根目录到 sys.path
 
-from fashionrec.industrial.ranking.fusion import ACTIVITY_WEIGHTS, ActivityTier  # 导入默认权重表与活跃度分层类型
+from fashionrec.industrial.ranking.fusion import (  # 导入默认权重表与活跃度分层类型
+    ACTIVITY_WEIGHTS,
+    AUXILIARY_CHANNEL_WEIGHTS,
+    ActivityTier,
+)
 from fashionrec.industrial.evaluation.offline_eval import (  # 导入离线评估相关组件
     EVAL_OUT_DIR,  # 评估指标输出目录
     FusionEvalContext,  # 融合评估上下文
@@ -53,7 +57,22 @@ TIER_WEIGHT_RANGES: dict[ActivityTier, dict[str, tuple[float, float]]] = {  # �
     },  # 冷启动分层范围结束
 }  # 搜索区间字典结束
 
-CHANNEL_KEYS = ("sequence", "popular", "category_popular", "item2item")  # 四通道权重键名元组
+BASE_CHANNEL_KEYS = ("sequence", "popular", "category_popular", "item2item")
+AUXILIARY_CHANNEL_KEYS = ("repurchase", "style", "content")
+CHANNEL_KEYS = (*BASE_CHANNEL_KEYS, *AUXILIARY_CHANNEL_KEYS)
+AUXILIARY_WEIGHT_RANGES: dict[ActivityTier, dict[str, tuple[float, float]]] = {
+    "high": {"repurchase": (0.05, 0.35), "style": (0.00, 0.25), "content": (0.00, 0.20)},
+    "medium": {"repurchase": (0.00, 0.30), "style": (0.00, 0.30), "content": (0.00, 0.25)},
+    "low": {"repurchase": (0.00, 0.20), "style": (0.00, 0.30), "content": (0.00, 0.30)},
+    "cold_start": {"repurchase": (0.00, 0.00), "style": (0.00, 0.00), "content": (0.05, 0.40)},
+}
+
+
+def _default_search_weights() -> dict[ActivityTier, dict[str, float]]:
+    return {
+        tier: {**ACTIVITY_WEIGHTS[tier], **AUXILIARY_CHANNEL_WEIGHTS[tier]}
+        for tier in ("high", "medium", "low", "cold_start")
+    }
 
 
 def _grid_values(low: float, high: float, step: float) -> list[float]:  # 在区间内按步长生成网格值
@@ -68,10 +87,10 @@ def _grid_values(low: float, high: float, step: float) -> list[float]:  # 在区
 
 
 def _normalize_tier_weights(raw: dict[str, float]) -> dict[str, float]:  # 将分层原始权重归一化为和为 1
-    total = sum(raw[k] for k in CHANNEL_KEYS)  # 计算四通道权重之和
+    total = sum(raw[k] for k in BASE_CHANNEL_KEYS)  # 计算基础四通道权重之和
     if total <= 0:  # 若总和非正
         raise ValueError(f"Invalid tier weights (sum <= 0): {raw}")  # 抛出无效权重异常
-    return {k: raw[k] / total for k in CHANNEL_KEYS}  # 按总和归一化并返回
+    return {k: raw[k] / total for k in BASE_CHANNEL_KEYS}  # 按总和归一化并返回
 
 
 def _in_range(value: float, bounds: tuple[float, float], tol: float = 1e-6) -> bool:  # 判断值是否在区间内（含容差）
@@ -145,7 +164,8 @@ def load_best_weights(path: str | Path) -> dict[str, Any]:  # 从 JSON 文件加
     for tier in ("high", "medium", "low", "cold_start"):  # 遍历四个活跃度分层
         if tier not in best:  # 若缺少某分层
             raise KeyError(f"Missing tier '{tier}' in weights file: {path}")  # 抛出键缺失异常
-        activity_weights[tier] = {k: float(best[tier][k]) for k in CHANNEL_KEYS}  # 解析该分层四通道权重
+        defaults = _default_search_weights()[tier]
+        activity_weights[tier] = {k: float(best[tier].get(k, defaults[k])) for k in CHANNEL_KEYS}
     data["best_weights"] = activity_weights  # 将解析后的权重写回数据
     return data  # 返回完整数据
 
@@ -162,7 +182,7 @@ def search_best_weights(  # 坐标下降式网格搜索最优分层权重
 
     Only fusion weights change; recall candidates are fixed in context.  # 仅融合权重变化，召回候选在上下文中固定
     """  # 坐标下降网格搜索：在固定召回候选下优化各分层权重以最大化验证集 MAP@12
-    best_weights = copy.deepcopy(ACTIVITY_WEIGHTS)  # 以默认权重为搜索起点
+    best_weights = _default_search_weights()  # 基础与扩展通道共同进入 valid 搜索
     best_map = evaluate_fusion_map_at_k(context, best_weights, exclude_seen=exclude_seen)  # 计算基线 MAP@12
     if verbose:  # 若启用详细输出
         print(f"Baseline MAP@12={best_map:.6f} exclude_seen={exclude_seen}")  # 打印基线 MAP
@@ -180,13 +200,13 @@ def search_best_weights(  # 坐标下降式网格搜索最优分层权重
                 print(f"Tier {tier}: {len(candidates)} candidate weight sets")  # 打印候选数量
             for candidate in candidates:  # 遍历每个权重候选
                 trial_weights = copy.deepcopy(best_weights)  # 复制当前最优权重
-                trial_weights[tier] = candidate  # 替换当前分层的权重
+                trial_weights[tier].update(candidate)  # 只替换基础四通道，保留扩展通道
                 trial_map = evaluate_fusion_map_at_k(  # 评估试用权重
                     context, trial_weights, exclude_seen=exclude_seen  # 传入上下文与排除已购标志
                 )  # 评估完成
                 if trial_map > best_map + 1e-9:  # 若 MAP 有显著提升
                     best_map = trial_map  # 更新最优 MAP
-                    best_weights[tier] = candidate  # 更新该分层最优权重
+                    best_weights[tier].update(candidate)  # 更新该分层基础权重
                     improved_any = True  # 标记本轮有改进
                     if verbose:  # 若启用详细输出
                         print(  # 打印新的最优结果
@@ -195,6 +215,18 @@ def search_best_weights(  # 坐标下降式网格搜索最优分层权重
                             f"trial_weights={json.dumps(candidate, ensure_ascii=False)} "  # 试用权重
                             f"all_tiers={json.dumps(best_weights, ensure_ascii=False)}"  # 全部层级权重
                         )  # 打印结束
+            for channel in AUXILIARY_CHANNEL_KEYS:
+                low, high = AUXILIARY_WEIGHT_RANGES[tier][channel]
+                for value in _grid_values(low, high, step):
+                    trial_weights = copy.deepcopy(best_weights)
+                    trial_weights[tier][channel] = value
+                    trial_map = evaluate_fusion_map_at_k(
+                        context, trial_weights, exclude_seen=exclude_seen
+                    )
+                    if trial_map > best_map + 1e-9:
+                        best_map = trial_map
+                        best_weights[tier][channel] = value
+                        improved_any = True
         if not improved_any:  # 若本轮无任何改进
             if verbose:  # 若启用详细输出
                 print("No improvement in this pass; stopping early.")  # 提示提前停止
@@ -276,7 +308,10 @@ def run_weight_search(  # 运行完整权重搜索流程并保存结果
         "exclude_seen": selected["exclude_seen"],  # 选中的排除已购模式
         "best_map@12": selected["best_map@12"],  # 选中模式的最优 MAP@12
         "best_weights": {  # 选中模式的最优权重
-            tier: {k: float(selected["best_weights"][tier][k]) for k in CHANNEL_KEYS}  # 各分层四通道权重
+            tier: {
+                k: float(selected["best_weights"][tier].get(k, _default_search_weights()[tier][k]))
+                for k in CHANNEL_KEYS
+            }
             for tier in ("high", "medium", "low", "cold_start")  # 遍历四个分层
         },  # 最优权重结束
         "compared_exclude_seen": {  # 各 exclude_seen 模式对比结果
@@ -284,7 +319,10 @@ def run_weight_search(  # 运行完整权重搜索流程并保存结果
                 "exclude_seen": res["exclude_seen"],  # 排除已购标志
                 "best_map@12": res["best_map@12"],  # 该模式最优 MAP@12
                 "best_weights": {  # 该模式最优权重
-                    tier: {k: float(res["best_weights"][tier][k]) for k in CHANNEL_KEYS}  # 各分层四通道权重
+                    tier: {
+                        k: float(res["best_weights"][tier].get(k, _default_search_weights()[tier][k]))
+                        for k in CHANNEL_KEYS
+                    }
                     for tier in ("high", "medium", "low", "cold_start")  # 遍历四个分层
                 },  # 最优权重结束
             }  # 单模式结果结束

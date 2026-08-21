@@ -76,6 +76,7 @@ class RankingConfig:  # 学习排序协议；阶段 0 默认关闭
     objective: str  # 排序目标，默认 lambdarank
     top_k_for_training: int  # 排序训练使用的候选上限
     train_snapshot_limit: int  # 最近多少个因果 train weekly snapshots
+    use_sequence_features: bool  # 是否把唯一正式 SASRecF 的复用证据纳入 LambdaRank
 
 
 @dataclass(frozen=True)  # 不可变数据类
@@ -254,6 +255,9 @@ def load_experiment_config(path: str | Path | None = None) -> ExperimentConfig: 
         ),  # 目标结束
         top_k_for_training=_require_int(ranking_raw, "top_k_for_training", "ranking", default=500),  # 训练候选上限
         train_snapshot_limit=_require_int(ranking_raw, "train_snapshot_limit", "ranking", default=4),
+        use_sequence_features=_require_bool(
+            ranking_raw, "use_sequence_features", "ranking", default=False
+        ),
     )  # 排序协议结束
     evaluation = EvaluationConfig(  # 组装评估协议
         primary_metric=_require_str(evaluation_raw, "primary_metric", "evaluation", default=PRIMARY_METRIC_DEFAULT),  # 主指标

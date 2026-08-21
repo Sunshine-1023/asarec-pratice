@@ -18,13 +18,16 @@ RANKER_SCHEMA_VERSION = "hm.ranker.v1"  # 推理契约
 DEFAULT_N_ESTIMATORS = 200  # 计划建议 100～500
 DEFAULT_EARLY_STOPPING = 20  # valid 早停
 DEFAULT_LEARNING_RATE = 0.05  # 保守学习率
-NON_FEATURE_COLUMNS = set(KEY_COLUMNS) | set(LABEL_COLUMNS) | {"score", "pred", "rank"}  # 不得进模型
+NON_FEATURE_COLUMNS = set(KEY_COLUMNS) | set(LABEL_COLUMNS) | {
+    "score", "pred", "rank", "feature_version", "source_timestamp", "as_of_date"
+}  # 不得进模型
 
 
 @dataclass(frozen=True, slots=True)
 class RankerSchema:
     feature_columns: tuple[str, ...]  # 训练时冻结的列序
     defaults: dict[str, float]  # 缺列 / NaN 填充
+    categorical_maps: dict[str, dict[str, int]] | None = None  # token 特征编码表
     label_column: str = "relevance"  # 相关性
     group_column: str = "group_id"  # user-snapshot
     library: str = "lightgbm"  # 实现库
@@ -36,6 +39,7 @@ class RankerSchema:
     def to_json(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["feature_columns"] = list(self.feature_columns)
+        payload["categorical_maps"] = self.categorical_maps or {}
         return payload
 
     @classmethod
@@ -45,6 +49,10 @@ class RankerSchema:
         return cls(
             feature_columns=columns,
             defaults=defaults,
+            categorical_maps={
+                str(column): {str(value): int(code) for value, code in dict(values).items()}
+                for column, values in dict(payload.get("categorical_maps", {})).items()
+            },
             label_column=str(payload.get("label_column", "relevance")),
             group_column=str(payload.get("group_column", "group_id")),
             library=str(payload.get("library", "lightgbm")),
@@ -79,7 +87,11 @@ def select_feature_columns(frame: pd.DataFrame) -> list[str]:
     for column in frame.columns:
         if column in NON_FEATURE_COLUMNS:
             continue
-        if pd.api.types.is_numeric_dtype(frame[column]):
+        if (
+            pd.api.types.is_numeric_dtype(frame[column])
+            or pd.api.types.is_string_dtype(frame[column])
+            or pd.api.types.is_object_dtype(frame[column])
+        ):
             columns.append(str(column))
     if not columns:
         raise ValueError("ranking table has no numeric feature columns")
@@ -105,6 +117,14 @@ def _drop_tiny_groups(frame: pd.DataFrame, group_col: str, *, min_size: int = 2)
     return frame.loc[sizes >= min_size].copy()
 
 
+def _drop_unlearnable_groups(frame: pd.DataFrame, group_col: str, label_col: str) -> pd.DataFrame:
+    """Remove groups with no positive pairwise signal for LambdaRank."""
+    if label_col not in frame.columns:
+        raise KeyError(f"ranking table missing {label_col}")
+    positives = frame.groupby(group_col, sort=False)[label_col].transform("sum")
+    return frame.loc[positives > 0].copy()
+
+
 def prepare_rank_matrix(
     frame: pd.DataFrame,
     schema: RankerSchema,
@@ -121,7 +141,13 @@ def prepare_rank_matrix(
             features[column] = default
             missing_rates[column] = 1.0
             continue
-        series = pd.to_numeric(ordered[column], errors="coerce")
+        if column in (schema.categorical_maps or {}):
+            mapping = schema.categorical_maps[column]
+            series = ordered[column].astype("string").map(
+                lambda value: mapping.get(str(value), 0) if pd.notna(value) else 0
+            ).astype(float)
+        else:
+            series = pd.to_numeric(ordered[column], errors="coerce")
         missing = series.isna()
         missing_rates[column] = float(missing.mean()) if len(series) else 1.0
         features[column] = series.fillna(default)
@@ -151,12 +177,19 @@ def train_lambdarank(
     label_col = _label_column(train)
     group_col = "group_id" if "group_id" in train.columns else "user_id"
     train = _drop_tiny_groups(train, group_col)
+    train = _drop_unlearnable_groups(train, group_col, label_col)
     if train.empty:
         raise ValueError("train ranking table has no groups with at least 2 items")
     feature_columns = select_feature_columns(train)
+    categorical_maps: dict[str, dict[str, int]] = {}
+    for column in feature_columns:
+        if not pd.api.types.is_numeric_dtype(train[column]):
+            values = sorted({str(value) for value in train[column].dropna().tolist()})
+            categorical_maps[column] = {value: index for index, value in enumerate(values, start=1)}
     schema = RankerSchema(
         feature_columns=tuple(feature_columns),
         defaults={column: 0.0 for column in feature_columns},
+        categorical_maps=categorical_maps,
         label_column=label_col,
         group_column=group_col,
         n_estimators=n_estimators,
@@ -171,9 +204,11 @@ def train_lambdarank(
         if not valid.empty:
             if label_col not in valid.columns and "label" in valid.columns:
                 valid = valid.rename(columns={"label": label_col})
-            x_valid, group_valid, y_valid, valid_missing = prepare_rank_matrix(valid, schema)
-            eval_set = [(x_valid, y_valid)]
-            eval_group = [group_valid]
+            valid = _drop_unlearnable_groups(valid, group_col, label_col)
+            if not valid.empty:
+                x_valid, group_valid, y_valid, valid_missing = prepare_rank_matrix(valid, schema)
+                eval_set = [(x_valid, y_valid)]
+                eval_group = [group_valid]
 
     callbacks: list[Any] = []
     if eval_set is not None and early_stopping_rounds > 0:
@@ -207,6 +242,7 @@ def train_lambdarank(
     schema = RankerSchema(
         feature_columns=schema.feature_columns,
         defaults=schema.defaults,
+        categorical_maps=schema.categorical_maps,
         label_column=schema.label_column,
         group_column=schema.group_column,
         best_iteration=best_iteration,

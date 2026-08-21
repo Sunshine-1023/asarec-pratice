@@ -51,6 +51,29 @@ def test_recent_item_outranks_old_when_using_multi_window(tmp_path: Path) -> Non
     assert ranked[0][0] == "0000000001"  # 近窗更热
 
 
+def test_same_day_quantity_rows_do_not_inflate_popularity(tmp_path: Path) -> None:
+    duplicated = tmp_path / "duplicated.inter"
+    deduplicated = tmp_path / "deduplicated.inter"
+    _write_inter(
+        duplicated,
+        [
+            ("u1", "0000000001", "2020-09-01"),
+            ("u1", "0000000001", "2020-09-01"),
+            ("u2", "0000000002", "2020-09-01"),
+        ],
+    )
+    _write_inter(
+        deduplicated,
+        [
+            ("u1", "0000000001", "2020-09-01"),
+            ("u2", "0000000002", "2020-09-01"),
+        ],
+    )
+    duplicated_index = build_popular_index(duplicated, customers_path=None, articles_path=None)
+    deduplicated_index = build_popular_index(deduplicated, customers_path=None, articles_path=None)
+    assert duplicated_index.global_ranked == deduplicated_index.global_ranked
+
+
 def test_as_of_excludes_future_interactions(tmp_path: Path) -> None:  # as-of 防泄漏
     inter = tmp_path / "train.inter"
     _write_inter(

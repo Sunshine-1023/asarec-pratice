@@ -10,6 +10,7 @@ from typing import Literal  # 导入字面量类型
 import pandas as pd  # 导入 pandas 数据分析库
 
 from fashionrec.shared.domain.ids import canonical_item_id, canonical_user_id  # 统一 ID 契约
+from fashionrec.industrial.data.basket_history import history_from_interactions
 
 MAX_USER_HISTORY = 100  # 每用户保留的最大历史条数（与序列模型 MAX_ITEM_LIST_LENGTH 对齐）
 
@@ -57,7 +58,13 @@ def get_channel_weights_for_user(  # 按用户历史长度返回通道权重
         "category_popular": template["category_popular"],  # 类别热门通道权重
         "item2item": template["item2item"],  # 商品共现通道权重
     }  # 成熟通道结束
-    weights.update(AUXILIARY_CHANNEL_WEIGHTS[tier])
+    auxiliary_defaults = AUXILIARY_CHANNEL_WEIGHTS[tier]
+    weights.update(
+        {
+            channel: float(template.get(channel, default_weight))
+            for channel, default_weight in auxiliary_defaults.items()
+        }
+    )
     return weights
 
 
@@ -73,26 +80,7 @@ def build_user_history(  # 从交互文件构建每用户有序历史
     max_user_history: int = MAX_USER_HISTORY,  # 每用户最多保留的历史条数
 ) -> dict[str, list[str]]:  # 返回用户 ID 到物品序列的映射
     """Build per-user ordered history from one or more .inter files."""  # 从一个或多个 .inter 文件构建每用户有序历史
-    frames = []  # 初始化 DataFrame 列表
-    for path in inter_paths:  # 遍历每个交互文件路径
-        df = pd.read_csv(  # 读取用户、物品与时间戳列
-            path,
-            sep="\t",
-            usecols=["user_id:token", "item_id:token", "timestamp:float"],
-            dtype={"user_id:token": "string", "item_id:token": "string"},
-        )
-        df["user_id:token"] = df["user_id:token"].map(canonical_user_id)  # 统一用户 ID
-        df["item_id:token"] = df["item_id:token"].map(canonical_item_id)  # 统一商品 ID
-        frames.append(df)  # 将当前 DataFrame 加入列表
-    merged = pd.concat(frames, ignore_index=True)  # 合并所有交互记录
-    merged = merged.sort_values(["user_id:token", "timestamp:float"])  # 按用户与时间戳排序
-    history = (  # 构建用户到物品序列的映射
-        merged.groupby("user_id:token")["item_id:token"]  # 按用户分组并取物品列
-        .apply(lambda s: [canonical_item_id(x) for x in s.tolist()[-max_user_history:]])  # 每用户只保留最近 N 条
-        .to_dict()  # 转为字典
-    )  # 结束历史映射构建
-    return history  # 返回用户历史字典
-
+    return history_from_interactions(inter_paths, max_items=max_user_history)
 
 def normalize_item_id(item_id: str) -> str:  # 统一 item_id 格式（hm 与 hm_seq/RecBole 导出）
     """Return the shared ten-character H&M item ID representation."""  # 返回统一十位商品 ID

@@ -16,7 +16,7 @@ from fashionrec.industrial.data.item_features import (  # 文本/类别清洗
     clean_text,
     load_articles_table,
 )
-from fashionrec.shared.domain.ids import canonical_item_id  # SKU
+from fashionrec.shared.domain.ids import canonical_item_id, canonical_user_id  # 用户与 SKU
 from fashionrec.industrial.recall.window_scores import build_window_popularity, filter_interactions_as_of  # 冷启动热度
 
 
@@ -88,13 +88,18 @@ def _load_interactions(*inter_paths: str | Path) -> pd.DataFrame:  # 读交互
         df = pd.read_csv(
             path,
             sep="\t",
-            usecols=["item_id:token", "timestamp:float"],
-            dtype={"item_id:token": "string"},
+            usecols=["user_id:token", "item_id:token", "timestamp:float"],
+            dtype={"user_id:token": "string", "item_id:token": "string"},
         )
+        df["user_id:token"] = df["user_id:token"].map(canonical_user_id)
         df["item_id:token"] = df["item_id:token"].map(canonical_item_id)  # 商品
         df["date"] = pd.to_datetime(df["timestamp:float"], unit="s").dt.normalize()  # 自然日
-        frames.append(df[["item_id:token", "date"]])  # 保留列
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()  # 合并
+        frames.append(df[["user_id:token", "item_id:token", "date"]])
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True).drop_duplicates(
+        ["user_id:token", "item_id:token", "date"], keep="first"
+    )
 
 
 def build_content_index(  # 构建内容索引

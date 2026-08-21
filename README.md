@@ -85,7 +85,7 @@ make downstream PROFILE=baseline RUN_ID=exp-001
 | Profile | 配置 | 数据/标签 | 候选 | 排序与评估 |
 |---|---|---|---|---|
 | `baseline` | `configs/baseline/experiment.yaml` | 行级时间切分、SASRecF 序列 | Popular / Category Popular / Item2Item / SASRecF | valid 搜索 Weighted RRF，行级购买集合 MAP@12 |
-| `industrial` | `configs/industrial/experiment.yaml` | user-day-item、basket、next-basket、PIT 用户特征 | baseline + Repurchase / Style / Content | 因果快照训练表、LambdaRank、next-basket RRF 对照 |
+| `industrial` | `configs/industrial/experiment.yaml` | user-day-item、basket、next-basket、PIT 用户特征 | baseline + Repurchase / Style / Content | 单一 SASRecF 简单复用特征、LambdaRank、next-basket RRF 对照 |
 
 ## 脚本执行顺序
 
@@ -96,8 +96,10 @@ make downstream PROFILE=baseline RUN_ID=exp-001
 | ③ | `make select-checkpoint` / `fashionrec select-checkpoint` | 完整 valid 用户周 MAP@12 选择 checkpoint | ✅ |
 | ④ | `make recall` / `fashionrec recall` | 使用选定模型导出 valid/test 召回 | ✅ |
 | ⑤ | `make candidates` / `fashionrec candidates` | baseline 四路或 industrial 扩展多路候选物化 | ✅ |
-| ⑥ | `make weights` / `fashionrec weights` | valid 上坐标下降搜索融合权重 | ✅ |
-| ⑦ | `make evaluate` / `fashionrec evaluate` | 四路融合 + MAP@12（test 只在最终阶段评估） | ✅ |
+| ⑥ | Industrial `ranker-sequence` | 复用唯一 `sasrecf_selected.pth`，按各训练快照的用户历史生成 LightGBM 序列证据 | Industrial |
+| ⑦ | Industrial `ranker-dataset/train/predict` | 拼接含 `sasrecf_present/score/rank` 的排序表并训练 LambdaRank | Industrial |
+| ⑧ | `make weights` / `fashionrec weights` | valid 上坐标下降搜索融合权重 | ✅ |
+| ⑨ | `make evaluate` / `fashionrec evaluate` | RRF / LambdaRank + MAP@12（test 只在最终阶段评估） | ✅ |
 
 ### 一键跑全流程
 
@@ -145,11 +147,13 @@ PYTHONPATH=src python -m fashionrec train --help
 filter（train 拟合商品集）→ preprocess → split → model_train → hm_seq → hm_seq.item
     → 训练 SASRecF → valid 用户周 MAP@12 选 checkpoint → 导出 sasrecf_{valid,test}.csv
     → Baseline 四路 Candidate 物化 → Weighted RRF
-    → Industrial 扩展候选 → LightGBM LambdaRank
+    → Industrial 扩展候选 → 单一 SASRecF 简单复用 → 含 SASRecF 特征的 LightGBM LambdaRank
     → valid 权重搜索 → offline_eval（MAP@12）
 ```
 
 四路召回：**SASRecF**、**Popular**、**Category Popular**、**Item2Item**。融合时按用户历史长度分档（high / medium / low / cold_start）；默认排序实现位于 `src/fashionrec/ranking/weighted_rrf.py`。
+
+Industrial 只训练一个 SASRecF checkpoint。LightGBM 的历史训练快照复用该模型，但输入历史仍按快照日截断。由于模型参数、商品词表和 checkpoint 选择可能看过历史快照之后的数据，这属于用户选择的“简单复用”实验协议，不是严格 PIT；相关报告会写入 `causal_model=false`，离线 LambdaRank 指标可能偏高。
 
 ### 两套切分逻辑
 

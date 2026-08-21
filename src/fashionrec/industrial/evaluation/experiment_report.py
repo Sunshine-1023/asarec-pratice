@@ -292,12 +292,13 @@ def compare_ranker_variants(  # 判断 LambdaRank 是否可替换默认 RRF；�
             improved.append(key)
     payload["deltas"] = deltas
     payload["improved_metrics"] = improved
+    map_key = f"MAP@{k}"
     payload["overall_improved"] = bool(improved)
+    payload["primary_metric_improved"] = deltas.get(map_key, 0.0) > 0.0
 
     regressions: list[dict[str, Any]] = []
     candidate_tiers = _tier_map(list(candidate_variant.get("per_tier") or []))
     baseline_tiers = _tier_map(list(baseline_variant.get("per_tier") or []))
-    map_key = f"MAP@{k}"
     for tier in REQUIRED_TIERS:
         baseline_row = baseline_tiers.get(tier)
         candidate_row = candidate_tiers.get(tier)
@@ -322,7 +323,7 @@ def compare_ranker_variants(  # 判断 LambdaRank 是否可替换默认 RRF；�
             )
     payload["tier_regressions"] = regressions
     payload["major_tier_regression"] = bool(regressions)
-    replace = payload["overall_improved"] and not payload["major_tier_regression"]
+    replace = payload["primary_metric_improved"] and not payload["major_tier_regression"]
     payload["replace_default_ranker"] = replace
     if replace:
         payload["reason"] = (
@@ -332,8 +333,10 @@ def compare_ranker_variants(  # 判断 LambdaRank 是否可替换默认 RRF；�
     elif payload["major_tier_regression"]:
         dropped = ", ".join(row["activity_tier"] for row in regressions)
         payload["reason"] = f"{candidate} has major MAP regression on tiers: {dropped}"
+    elif not payload["primary_metric_improved"]:
+        payload["reason"] = f"{candidate} does not improve primary metric MAP@{k} vs {baseline_name}"
     else:
-        payload["reason"] = f"{candidate} does not improve MAP/Recall/NDCG@{k} vs {baseline_name}"
+        payload["reason"] = f"{candidate} does not pass the replacement gate vs {baseline_name}"
     return payload
 
 

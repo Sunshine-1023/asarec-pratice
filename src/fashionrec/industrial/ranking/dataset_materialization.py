@@ -21,6 +21,8 @@ from fashionrec.industrial.ranking.dataset import RankingDataset, build_ranking_
 from fashionrec.industrial.recall.generator import generate_candidates, read_candidate_csv
 from fashionrec.industrial.recall.channel_registry import build_rule_channel_registry
 from fashionrec.industrial.recall.service import ALL_CHANNELS
+from fashionrec.industrial.data.basket_history import history_from_events
+from fashionrec.industrial.models.sasrecf.ranking_features import load_snapshot_sequence_candidates
 
 
 SEQUENCE_CHANNEL = "sasrecf"
@@ -69,11 +71,7 @@ def build_history_as_of(
     if max_items < 1:
         raise ValueError("max_items must be >= 1")
     cutoff = _as_day(as_of)
-    history = events[events["date"] <= cutoff]
-    return {
-        canonical_user_id(user_id): [canonical_item_id(item) for item in group["item_id"].tolist()[-max_items:]]
-        for user_id, group in history.groupby("user_id", sort=True)
-    }
+    return history_from_events(events, max_items=max_items, as_of=cutoff)
 
 
 def _snapshot_dates(snapshots: pd.DataFrame, split: str) -> list[pd.Timestamp]:
@@ -108,6 +106,7 @@ def build_train_candidate_batches(
     item_file: Path,
     articles_path: Path,
     customers_path: Path,
+    sequence_feature_dir: Path | None = None,
 ) -> list[CandidateBatch]:
     dates = _snapshot_dates(snapshots, "train")[-config.ranking.train_snapshot_limit :]
     if not dates:
@@ -132,6 +131,15 @@ def build_train_candidate_batches(
             split="train",
             top_k_by_channel=_channel_top_k(config),
         )
+        if config.ranking.use_sequence_features:
+            if sequence_feature_dir is None:
+                raise ValueError("ranking.use_sequence_features requires sequence_feature_dir")
+            sequence_candidates = load_snapshot_sequence_candidates(sequence_feature_dir, as_of)
+            bad_splits = sorted({candidate.split for candidate in sequence_candidates if candidate.split != "train"})
+            if bad_splits:
+                raise ValueError(f"snapshot SASRecF candidates must use split=train, found={bad_splits}")
+            user_set = set(users)
+            generated.extend(candidate for candidate in sequence_candidates if candidate.user_id in user_set)
         frozen = union_candidates(generated, config.ranking.top_k_for_training)
         if not frozen:
             raise ValueError(f"train candidate union is empty for snapshot {as_of.date()}")
@@ -205,6 +213,7 @@ def materialize_ranking_tables(
     diagnostics_dir: Path,
     articles_path: Path,
     customers_path: Path,
+    sequence_feature_dir: Path | None = None,
 ) -> dict[str, object]:
     snapshots = _read_required_parquet(data_dir / "snapshots", "snapshots")
     labels = _read_required_parquet(data_dir / "labels", "next-basket labels")
@@ -223,6 +232,7 @@ def materialize_ranking_tables(
         item_file=data_dir / "hm_seq" / "hm_seq.item",
         articles_path=articles_path,
         customers_path=customers_path,
+        sequence_feature_dir=sequence_feature_dir,
     )
     valid_batch = load_eval_candidate_batch(
         split="valid",
@@ -249,7 +259,7 @@ def materialize_ranking_tables(
         user_cohorts=_customer_cohorts(customer_features),
     )
 
-    channels = [*ALL_CHANNELS, SEQUENCE_CHANNEL]
+    channels = [*ALL_CHANNELS, SEQUENCE_CHANNEL] if config.ranking.use_sequence_features else list(ALL_CHANNELS)
     frames: dict[str, list[pd.DataFrame]] = {"train": [], "valid": [], "test": []}
     uncovered: dict[str, int] = {"train": 0, "valid": 0, "test": 0}
     for batch in batches:
@@ -269,6 +279,20 @@ def materialize_ranking_tables(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     summary: dict[str, object] = {"schema_version": "hm.ranking_materialization.v1", "splits": {}}
+    if config.ranking.use_sequence_features:
+        if sequence_feature_dir is None:
+            raise ValueError("ranking.use_sequence_features requires sequence_feature_dir")
+        reuse_report = sequence_feature_dir / "model_reuse_report.json"
+        if not reuse_report.is_file():
+            raise FileNotFoundError(f"SASRecF model reuse report not found: {reuse_report}")
+        reuse_payload = json.loads(reuse_report.read_text(encoding="utf-8"))
+        summary["sequence_evidence"] = {
+            "mode": reuse_payload.get("mode"),
+            "model_file": reuse_payload.get("model_file"),
+            "causal_model": reuse_payload.get("causal_model"),
+            "history_as_of": reuse_payload.get("history_as_of"),
+            "warning": reuse_payload.get("warning"),
+        }
     for split, split_frames in frames.items():
         frame = pd.concat(split_frames, ignore_index=True) if split_frames else pd.DataFrame()
         if frame.empty:
@@ -334,7 +358,7 @@ def _write_valid_candidate_diagnostics(
         )
     diagnostics = diagnose_users(
         users,
-        channels=[*ALL_CHANNELS, SEQUENCE_CHANNEL],
+        channels=[*ALL_CHANNELS, SEQUENCE_CHANNEL] if SEQUENCE_CHANNEL in {c.channel for c in batch.candidates} else list(ALL_CHANNELS),
         activity_tiers=activity_tiers,
         union_k_for_counts=union_top_k,
     )
@@ -344,7 +368,7 @@ def _write_valid_candidate_diagnostics(
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="fashionrec ranker-dataset",
-        description="Build causal train/valid/test LambdaRank parquet tables.",
+        description="Build train/valid/test LambdaRank tables with single-checkpoint SASRecF reuse.",
     )
     parser.add_argument("--experiment-config", type=Path, required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
@@ -353,6 +377,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--diagnostics-dir", type=Path, required=True)
     parser.add_argument("--articles-path", type=Path, default=Path("data/raw/articles.csv"))
     parser.add_argument("--customers-path", type=Path, default=Path("data/raw/customers.csv"))
+    parser.add_argument("--sequence-feature-dir", type=Path, default=None)
     args = parser.parse_args(argv)
     config = load_experiment_config(args.experiment_config)
     if config.ranking.library != "lightgbm" or config.ranking.objective != "lambdarank":
@@ -365,6 +390,7 @@ def main(argv: list[str] | None = None) -> None:
         diagnostics_dir=args.diagnostics_dir,
         articles_path=args.articles_path,
         customers_path=args.customers_path,
+        sequence_feature_dir=args.sequence_feature_dir,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 

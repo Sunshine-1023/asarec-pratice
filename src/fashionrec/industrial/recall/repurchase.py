@@ -38,7 +38,11 @@ def _load_interactions(*inter_paths: str | Path) -> pd.DataFrame:  # 读交互
         df["item_id:token"] = df["item_id:token"].map(canonical_item_id)  # 商品
         df["date"] = pd.to_datetime(df["timestamp:float"], unit="s").dt.normalize()  # 自然日
         frames.append(df[["user_id:token", "item_id:token", "date"]])  # 保留列
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()  # 合并
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True).drop_duplicates(
+        ["user_id:token", "item_id:token", "date"], keep="first"
+    )
 
 
 def _recency_weight(last_date: pd.Timestamp, *, as_of: pd.Timestamp, half_life_days: float) -> float:  # 近因衰减
@@ -67,7 +71,7 @@ def build_repurchase_index(  # 构建复购索引
     user_stats: dict[str, dict[str, tuple[int, pd.Timestamp]]] = {}  # 聚合
     grouped = frame.groupby(["user_id:token", "item_id:token"], sort=False)  # 用户-SKU
     for (user_id, item_id), group in grouped:  # 每组
-        count = int(len(group))  # 购买次数
+        count = int(group["date"].nunique())  # 购买日次数，不把同日数量重复当复购次数
         last_date = pd.Timestamp(group["date"].max()).normalize()  # 最近购买日
         user_stats.setdefault(str(user_id), {})[str(item_id)] = (count, last_date)  # 写入
     return RepurchaseIndex(user_stats=user_stats)  # 返回

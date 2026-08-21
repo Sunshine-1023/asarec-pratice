@@ -61,3 +61,30 @@
 - 2026-08-21：删除被 alias 遮蔽的旧 data/recall/training facade 文件和无引用的旧 pipeline profile 子目录；新增结构回归防止冗余回流。
 - 2026-08-21：Baseline 紧凑 item catalog 只读取 8 个 SASRecF 类别字段和实际序列 SKU；继续删除未接入 DAG 的候选诊断副本后，Baseline 源码降至 5,488 行，较清理前减少 3,980 行。
 - 2026-08-21：完整 `make check` 通过，254 项测试与全部 CLI smoke checks 成功；重复度复测、双 profile Make dry-run、compileall 和 `git diff --check` 均通过。
+- 2026-08-21：开始清理后的双链路只读复审；新增阶段 36–40，重点确认最小化 Baseline 后依赖仍闭环，以及 Industrial 先前已知语义问题是否仍存在。
+- 2026-08-21：完成两套默认 DAG 与配置初审；Baseline 10 步、Industrial 14 步仍完整规划，正式命令全部使用各自应用入口和 run-scoped 产物。
+- 2026-08-21：复核 Industrial ranking materialization/LambdaRank；确认训练候选无 SASRecF、valid/test 有 SASRecF 的特征偏移仍存在，且当前仅 numeric 特征、未过滤零正例 group。
+- 2026-08-21：确认 Industrial cohort 热度仅基于当前候选批次用户；valid/test 规则召回/RRF 用户历史仍按 `.inter` 行数截断，继续逐通道核对购物篮语义。
+- 2026-08-21：确认 SASRecF 与 next-basket 标签已正确去除同日伪序列/数量重复计分；规则召回、RRF 活跃度和部分热度/复购统计仍是交易行语义，购物篮协议未贯穿全链。
+- 2026-08-21：完成阶段 36–38 的代码审计；两链文件依赖闭环和 valid/test 边界正确，Industrial 仍有 SASRecF feature shift、cohort 口径、交易行历史、ranker gate 与全量内存风险。进入定向回归。
+- 2026-08-21：70 项定向测试通过；完整 `make check` 通过，254 项测试与全部 CLI smoke checks 成功；双应用 dry-run、跨应用 import 和 git diff check 通过。
+- 2026-08-21：阶段 36–40 完成。结论：Baseline 是完整可复现的旧协议闭环；Industrial 是代码级完整实验闭环，但尚不能视为语义统一、全量验证过的工业化链路。
+- 2026-08-21：用户授权修复审计发现的问题；新增阶段 41–44，约束为只在 `industrial/data|recall|ranking|evaluation|models` 内增量修改，不新增顶层业务目录、不改变 Baseline 协议。
+- 2026-08-21：新增 `industrial/data/basket_history.py`，统一 Industrial 召回/RRF/ranking 的 user-day-item 去重和购物日历史截断；复购改为购买日次数。
+- 2026-08-21：cohort 交叉特征改为完整 customer cohort 聚合；LambdaRank 表统一六路因果规则候选，移除 valid/test 独有的 SASRecF 特征；无正例 group 不再进入训练，token 特征保存编码 schema。
+- 2026-08-21：定向测试与完整 `make check` 通过，254 项测试全部成功，CLI smoke checks 通过；未运行 3.2GB raw 的完整训练。
+- 2026-08-21：Industrial Popular/CategoryPopular/Style/Content 热度输入统一按 user-day-item 去重；Repurchase 明确按购买日计数，避免同日数量行放大热度或复购强度。
+- 2026-08-21：新增 LambdaRank 零正例 group、冻结 token 映射、未知类别回退与空验证集回归；空验证集现在跳过 early stopping，不向 LightGBM 传空矩阵。
+- 2026-08-21：最终 `make check` 通过，261 项测试全部成功，Baseline/Industrial/兼容 CLI smoke checks 通过；跨应用 import 扫描、Industrial 编译和 `git diff --check` 通过。
+- 2026-08-21：本轮唯一新增业务文件为 `src/fashionrec/industrial/data/basket_history.py`；没有在目标结构外新增业务目录或实现文件，Baseline 源码未修改。
+- 2026-08-21：用户要求 LightGBM 使用 SASRecF；确认不能直接恢复 valid/test 独有的 SASRecF 列，否则训练快照缺失且存在 train-serving 偏移/未来泄漏。进入阶段 47–50，方案为训练快照级因果 SASRecF 模型与召回。
+- 2026-08-21：新增 `industrial/models/sasrecf/snapshot_features.py`，为最近 4 个 LambdaRank train snapshot 生成各自的数据集、独立 SASRecF checkpoint 与 train recall；所有输入严格截断到 as-of。
+- 2026-08-21：Industrial ranking table 恢复 `sasrecf_present/sasrecf_score/sasrecf_rank`，train 使用快照级召回，valid/test 使用正式 SASRecF 候选，三 split 特征协议一致。
+- 2026-08-21：Industrial DAG 增至 15 步，新增 `ranker-sequence` 命令；Baseline DAG、配置与源码均未改动。
+- 2026-08-21：新增快照日期选择、未来事件排除、产物命名空间和无 RecBole 编排测试；最终 `make check` 全部通过，含 `ranker-sequence` CLI smoke。
+- 2026-08-21：同步 README 与 ARCHITECTURE：明确 Industrial LambdaRank 现已消费因果 SASRecF present/score/rank，且默认增加快照级序列训练阶段。
+- 2026-08-21：用户最终选择单模型“简单复用”协议：只保留正式 SASRecF；LightGBM 多个历史训练快照复用该 checkpoint。该选择明确接受模型参数、词表和选模看过后续数据所造成的非严格因果离线指标，代码与报告将显式标记为 model reuse。
+- 2026-08-21：删除快照级 SASRecF 训练实现，改为 `industrial/models/sasrecf/ranking_features.py` 加载唯一 `sasrecf_selected.pth` 一次，并按最近 4 个 train snapshot 的 as-of 用户历史生成序列候选。
+- 2026-08-21：Industrial DAG 仍为 15 步，但只有第 2 步训练 SASRecF；第 8 步只做单 checkpoint 推理。已删除额外 checkpoint 路径及 `sequence_snapshot_epochs/sequence_validation_days` 配置。
+- 2026-08-21：序列复用报告和 ranking dataset report 显式记录 `mode=single_checkpoint_simple_reuse`、`causal_model=false`、`history_as_of=true` 和唯一 checkpoint 路径。
+- 2026-08-21：50 项定向回归通过；完整 `make check`、全部 CLI smoke、DAG 单训练检查和 `git diff --check` 通过。Baseline 源码/配置未修改，未启动真实 SASRecF/LightGBM 训练。

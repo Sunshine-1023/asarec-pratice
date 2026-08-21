@@ -39,11 +39,31 @@
 - [completed] 33. 整理 Industrial data 公共模块命名，移除 wrapper/build 双文件
 - [completed] 34. 清理安全可退役的死文件与过期兼容引用
 - [completed] 35. 运行定向回归、完整 make check、重复度复测与文档收口
+- [completed] 36. 复核清理后 Baseline/Industrial 实际 DAG 与命令参数
+- [completed] 37. 核对两链数据、标签、历史和防泄漏语义
+- [completed] 38. 核对召回、候选、排序、权重和评估闭环
+- [completed] 39. 运行结构/逻辑定向回归并复查全量测试状态
+- [completed] 40. 输出两条具体流程、完整性判断和问题优先级
+- [completed] 41. 统一 Industrial 购物篮历史协议
+- [completed] 42. 修正 cohort 全桶 PIT 聚合
+- [completed] 43. 消除 LambdaRank train-serving 特征偏移
+- [completed] 44. 定向回归、全量检查与文档收口
+- [completed] 45. 统一 Industrial 热度/复购的同日数量去重并补齐回归锁定
+- [completed] 46. 修复 LambdaRank 空验证集边界并完成最终结构/全量验证
+- [completed] 47. 设计并物化训练快照级因果 SASRecF 召回产物
+- [completed] 48. 将 SASRecF present/score/rank 接入 LambdaRank train/valid/test 表
+- [completed] 49. 接入 Industrial 独立 DAG、配置、产物契约与 CLI
+- [completed] 50. 补充防泄漏/特征一致性测试并完成全量回归
+- [completed] 51. 将 Industrial SASRecF 协议改为单一正式 checkpoint 简单复用
+- [completed] 52. 用单模型为多个 LambdaRank train 快照生成序列召回证据
+- [completed] 53. 删除快照级训练配置、额外 checkpoint 与误导性文档
+- [completed] 54. 补充泄漏标识/单模型契约测试并完成全量回归
 
 ## Decisions
 - `ranking.enabled: false` 时保持当前默认 RRF 链的执行成本和产物语义，不强制扫描额外事件/特征。
 - `ranking.enabled: true` 时由 pipeline 显式开启 labels、PIT user/cross features，并在 ranker 训练前生成固定 ranking parquet。
 - LambdaRank 训练样本必须只使用 as-of 及以前历史；禁止用训练完成后的 SASRecF 为更早快照生成会泄漏的序列分数。
+- 用户于 2026-08-21 明确选择“简单复用”：Industrial 只训练一个正式 SASRecF，历史 LambdaRank train 快照复用该 checkpoint；保留 as-of 用户输入历史，但接受模型参数、商品词表和 checkpoint 选择看过后续数据造成的非严格因果离线指标。
 - RRF 继续作为安全基线，但要么显式支持所有已物化通道，要么不得让零权重通道无声参与 union 截断。
 - 首版使用最近若干个 train weekly snapshots；数量由 `ranking.train_snapshot_limit` 显式配置，默认 4，避免全量重复构建 25 套规则索引。
 - 正式产物路径改为 `outputs/runs/<profile>/<run_id>/`；两个 profile 即使使用相同 run-id 也不发生覆盖。
@@ -62,7 +82,7 @@
 - 旧 import 兼容继续通过 package-level `sys.modules` alias 提供；已被 alias 遮蔽的同名物理 facade 文件直接删除，避免第三份假实现。
 
 ## Next Step
-如需继续降低重复，只剩架构取舍：是否接受把两应用中仍字节级相同的 paths/time/checkpoint/union/coverage/manifest 等稳定实现下沉 shared；当前按“算法物理隔离”原则暂不合并。
+单 SASRecF 简单复用链路已完成；下一步用新 run-id 真实运行 Industrial，测量 8GB CUDA 下的耗时、显存和 LambdaRank 指标。
 
 ## Errors Encountered
 | Error | Attempt | Resolution |
@@ -82,3 +102,7 @@
 | 本轮尝试用 ruff/pyflakes 做静态冗余检查，但环境未安装 | 1 | 改用 AST import/reachability、源码哈希、规范化 diff 和运行时模块身份检查完成审计 |
 | 定向回归命令误写不存在的 `tests/test_fusion.py`、`tests/test_sequence_preparation.py`、`tests/test_build_item_features.py` | 1 | 用 `rg --files tests` 定位真实文件名后重新运行，相关测试全部通过 |
 | Industrial alias 迁移补丁首次按错误的字典顺序匹配 `data/__init__.py` | 1 | 原子补丁未产生改动；读取实际内容后按真实顺序重新应用成功 |
+| 同日数量去重测试首次断言并列商品的 rank-normalized 分数相等 | 1 | 并列计数仍按 item ID 稳定赋 rank；改为比较重复输入与去重输入的完整索引一致性 |
+| `compileall` 在 Industrial 源码树生成 `__pycache__` | 1 | 仅清除本次检查生成的字节码缓存，未触碰源码和实验产物；后续验证使用 `PYTHONDONTWRITEBYTECODE=1` |
+| 用 `--dry-run` 检查 Industrial pipeline，但该 CLI 不提供该参数 | 1 | 命令在参数解析阶段退出、未执行步骤；后续改用 `build_pipeline_steps` 做只读 DAG 检查 |
+| 单次补丁同时匹配 progress/findings 尾部失败 | 1 | 补丁原子失败、无文件改动；读取实际尾部后分文件追加。 |

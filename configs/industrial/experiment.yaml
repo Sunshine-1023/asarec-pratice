@@ -42,6 +42,7 @@ ranking:
   objective: lambdarank
   top_k_for_training: 500
   train_snapshot_limit: 4
+  use_sequence_features: true
 
 evaluation:
   primary_metric: MAP@12

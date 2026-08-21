@@ -35,6 +35,21 @@ def test_repurchase_prefers_recent_and_frequent_sku(tmp_path: Path) -> None:  # 
     assert recalled[1][0] == "0000000002"  # 更早购买
 
 
+def test_repurchase_counts_purchase_days_not_same_day_quantity_rows(tmp_path: Path) -> None:
+    inter = tmp_path / "train.inter"
+    _write_inter(
+        inter,
+        [
+            ("u1", "0000000001", "2020-09-01"),
+            ("u1", "0000000001", "2020-09-01"),
+            ("u1", "0000000001", "2020-09-02"),
+        ],
+    )
+    index = build_repurchase_index(inter)
+    count, _last_date = index.user_stats["u1"]["0000000001"]
+    assert count == 2
+
+
 def test_repurchase_as_of_excludes_future_purchases(tmp_path: Path) -> None:  # as-of 防泄漏
     inter = tmp_path / "train.inter"
     _write_inter(

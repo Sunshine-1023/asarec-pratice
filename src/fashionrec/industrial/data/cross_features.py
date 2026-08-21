@@ -218,11 +218,10 @@ def build_cross_feature_table(  # 批量 user-item-as_of
         as_of_day = _as_day(as_of)  # 自然日
         global_hist = history_as_of(enriched, as_of_day)  # 全体历史
         by_user = {user_id: frame for user_id, frame in global_hist.groupby("user_id", sort=True)}  # 用户切片
-        cohort_users: dict[str, set[str]] = {}  # bucket -> users
-        for user_id in group["user_id"].unique():  # 本批用户
-            bucket = cohort_map.get(canonical_user_id(user_id))  # 分桶
-            if bucket:  # 有效
-                cohort_users.setdefault(bucket, set()).add(canonical_user_id(user_id))  # 收集
+        cohort_users: dict[str, set[str]] = {}  # bucket -> 全量用户
+        for user_id, bucket in cohort_map.items():  # 不随候选批次改变人群口径
+            if bucket:
+                cohort_users.setdefault(bucket, set()).add(canonical_user_id(user_id))
         cohort_hists: dict[str, pd.DataFrame] = {}  # bucket -> hist
         for bucket, users in cohort_users.items():  # 各人群
             cohort_hists[bucket] = global_hist[global_hist["user_id"].isin(users)].copy()  # 切片

@@ -16,7 +16,11 @@ COMMANDS = {
     "candidates": ApplicationCommand("fashionrec.industrial.recall.command", "Materialize expanded multi-recall candidates"),
     "weights": ApplicationCommand("fashionrec.industrial.ranking.weights", "Search next-basket RRF control weights"),
     "ranker-dataset": ApplicationCommand(
-        "fashionrec.industrial.ranking.dataset_materialization", "Build causal LambdaRank tables"
+        "fashionrec.industrial.ranking.dataset_materialization", "Build LambdaRank tables with reused SASRecF evidence"
+    ),
+    "ranker-sequence": ApplicationCommand(
+        "fashionrec.industrial.models.sasrecf.ranking_features",
+        "Reuse the single SASRecF checkpoint as LambdaRank evidence",
     ),
     "ranker-train": ApplicationCommand("fashionrec.industrial.ranking.train", "Train LightGBM LambdaRank"),
     "ranker-predict": ApplicationCommand("fashionrec.industrial.ranking.predict", "Score candidates with LambdaRank"),

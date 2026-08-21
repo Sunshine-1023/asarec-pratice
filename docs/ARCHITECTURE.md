@@ -67,7 +67,8 @@ baseline profile
 industrial profile
   events / baskets / next-basket labels / PIT user features
   → 独立 SASRecF 训练与 valid/test 扩展多路候选
-  → 最近 N 个因果 train 快照规则候选
+  → 最近 N 个因果 train 快照各自训练截止 as-of 的 SASRecF
+  → 六路规则召回 + 当期 SASRecF 的 train 候选
   → 全候选 cross features + train/valid/test ranking parquet
   → LightGBM LambdaRank 训练与打分
   → next-basket RRF vs LambdaRank valid/test 对照
@@ -99,9 +100,11 @@ outputs/runs/<profile>/<run_id>/
 
 baseline 的固定排序器是 `WeightedRRFRanker`。industrial 同时训练 `LightGBMRanker`，但保留同一候选集上的 RRF 作为对照。
 
-`src/fashionrec/industrial/ranking/features.py` 将候选并集透视为“一用户一商品”表，输出用户历史长度、通道覆盖数、最佳通道排名、最大通道分、各通道 `present / score / rank`、训练标签，以及 LightGBM LambdaRank 所需的用户 group sizes；模型训练与推理实现位于 `industrial/models/lambdarank/`。
+`src/fashionrec/industrial/ranking/features.py` 将候选并集透视为“一用户一商品”表，输出用户历史长度、通道覆盖数、最佳通道排名、最大通道分、各通道 `present / score / rank`（包括 SASRecF）、训练标签，以及 LightGBM LambdaRank 所需的用户 group sizes；模型训练与推理实现位于 `industrial/models/lambdarank/`。
 
-industrial 的 `ranker-dataset` 会把固定候选、PIT 用户/商品/交叉特征和 next-basket 标签拼成 train/valid/test parquet，再由 `ranker-train` 和 `ranker-predict` 消费。
+industrial 只训练并选出一个 `sasrecf_selected.pth`。`ranker-sequence` 加载这个 checkpoint 一次，再按每个 train snapshot 截止当日的用户历史生成 SASRecF 召回证据；不会创建额外快照模型或 checkpoint。`ranker-dataset` 将六路规则召回、复用的 SASRecF、PIT 用户/商品/交叉特征和 next-basket 标签拼成 train/valid/test parquet。
+
+这是明确选择的“简单复用”协议：历史输入序列按 as-of 截断，但模型参数、商品词表和 checkpoint 选择可能看过之后的数据。因此训练表报告会记录 `causal_model=false`、`history_as_of=true`；该 LambdaRank 离线结果不能解释为严格无泄漏的 PIT 指标。
 
 ## 公开入口
 

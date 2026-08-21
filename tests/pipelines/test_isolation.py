@@ -203,6 +203,7 @@ def test_profile_dags_have_independent_ranker_commands(tmp_path: Path) -> None:
         )
     ]
     assert all("ranker-" not in command for command in baseline_commands)
+    assert any("ranker-sequence" in command for command in industrial_commands)
     assert any("ranker-dataset" in command for command in industrial_commands)
     assert any("ranker-train" in command for command in industrial_commands)
     assert baseline.artifacts.root != industrial.artifacts.root

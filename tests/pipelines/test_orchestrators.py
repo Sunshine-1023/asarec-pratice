@@ -135,14 +135,20 @@ def test_pipeline_adds_ranker_steps_only_when_enabled(tmp_path: Path) -> None:
         options=PipelineOptions(skip_data_prep=True, skip_train=True, skip_checkpoint_selection=True, skip_recall=True, skip_candidates=True, skip_weight_search=True),
     )
     names = [step.name for step in steps]
-    assert names[0] == "构建 LambdaRank 因果训练表"
-    assert names[1] == "训练 LightGBM LambdaRank"
+    assert names[0] == "复用唯一 SASRecF 生成 LambdaRank 序列证据"
+    assert names[1] == "构建 LambdaRank 训练表（SASRecF 简单复用）"
+    assert names[2] == "训练 LightGBM LambdaRank"
     assert "LambdaRank 打分 valid" in names
     assert names[-1] == "离线排序评估 test"
-    dataset_command = " ".join(steps[0].command)
-    train_command = " ".join(steps[1].command)
+    sequence_command = " ".join(steps[0].command)
+    dataset_command = " ".join(steps[1].command)
+    train_command = " ".join(steps[2].command)
     industrial_root = tmp_path / "industrial" / "same"
     assert f"--output-dir {industrial_root / 'ranking'}" in dataset_command
+    assert "-m fashionrec.industrial ranker-sequence" in sequence_command
+    assert f"--model-file {industrial_root / 'checkpoints' / 'sasrecf_selected.pth'}" in sequence_command
+    assert "--checkpoint-dir" not in sequence_command
+    assert f"--sequence-feature-dir {industrial_root / 'ranking' / 'sasrecf_model_reuse'}" in dataset_command
     assert f"--train-parquet {industrial_root / 'ranking' / 'train.parquet'}" in train_command
     assert "-m fashionrec.industrial ranker-train" in train_command
     eval_commands = [" ".join(step.command) for step in steps if step.name.startswith("离线排序评估")]
