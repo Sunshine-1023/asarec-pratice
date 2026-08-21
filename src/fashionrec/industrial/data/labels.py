@@ -7,7 +7,7 @@ from pathlib import Path  # 路径
 
 import pandas as pd  # 聚合
 
-from fashionrec.industrial.data.build_events import aggregate_user_day_item_events  # 无事件文件时从交易现算
+from fashionrec.industrial.data.events import aggregate_user_day_item_events  # 无事件文件时从交易现算
 from fashionrec.industrial.data.snapshots import (  # 快照协议
     SNAPSHOT_SCHEMA_VERSION,  # 索引进度提示
     SnapshotSpec,  # 快照

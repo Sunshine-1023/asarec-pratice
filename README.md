@@ -23,15 +23,13 @@ FashionRec-Transformer/
 ├── src/
 │   └── fashionrec/
 │       ├── cli.py                  # 唯一公开 Python 命令入口
-│       ├── domain/                 # 商品 ID 与 Candidate 数据契约
-│       ├── data/                   # 数据过滤、切分、序列样本、商品特征
-│       ├── recall/                 # 通道接口、注册表与统一候选生成
-│       ├── candidates/             # 候选并集、去重与物化
-│       ├── ranking/                # Weighted RRF、融合与排序特征
-│       ├── training/               # 模型训练与 checkpoint 选择
-│       ├── evaluation/             # 指标、权重搜索与评估报告
+│       ├── baseline/               # 最小四路 RRF 应用
+│       ├── industrial/             # 购物篮/PIT/扩展召回/LambdaRank 应用
+│       ├── shared/                 # ID、Candidate、接口、I/O、指标、运行器
+│       ├── data/ recall/ ranking/  # 旧 import 兼容 alias/facade
+│       ├── training/ evaluation/
 │       ├── experiment/             # 统一配置、运行上下文与产物路径
-│       └── pipeline/               # 配置驱动的流水线编排
+│       └── pipeline/               # 旧 profile pipeline 兼容入口
 ├── tests/
 ├── requirements.txt
 └── README.md
@@ -112,7 +110,7 @@ make industrial WITH_FILTER=1
 
 正式流水线会创建 `outputs/runs/<profile>/<run_id>/`，把配置快照、checkpoint、召回、候选、排序和指标隔离保存。完整依赖方向与数据契约见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
-两条链现在是两个 top-level 应用。Baseline 位于 `src/fashionrec/baseline/`，Industrial 位于 `src/fashionrec/industrial/`；它们分别拥有 data/models/recall/ranking/evaluation/pipeline/CLI 及正式算法实现。共享层只保留 ID、Candidate、Recall/Ranker 接口、中立 I/O、纯指标和运行器；旧顶层算法目录仅用于 import 兼容。
+两条链现在是两个 top-level 应用。Baseline 位于 `src/fashionrec/baseline/`，Industrial 位于 `src/fashionrec/industrial/`；它们分别拥有 data/models/recall/ranking/evaluation/pipeline/CLI 及正式算法实现。Baseline 已清除 events/labels/PIT/LambdaRank 和扩展召回副本，数据准备只生成自身消费的交互、序列与 `hm_seq.item`。共享层只保留 ID、Candidate、Recall/Ranker 接口、中立 I/O、纯指标和运行器；旧顶层算法目录仅用于 import 兼容。
 
 可选参数：
 
@@ -137,13 +135,7 @@ PYTHONPATH=src python -m fashionrec train --help
 
 ## 代码注释规范
 
-本项目 Python 源码位于 `src/fashionrec/`，采用简体中文行尾注释：
-
-- 每一行非空白代码均有注释，说明该行作用
-- 模块 docstring 与函数说明同样使用简体中文
-- 注释风格与 `src/fashionrec/data/filter.py` 保持一致
-
-阅读代码时可直接看行尾注释理解逻辑，无需单独对照文档。
+源码注释优先解释数据语义、时间因果和协议边界，不要求逐行重复代码本身。模块与公开函数应保留清晰 docstring，Baseline/Industrial 的差异由目录、配置和边界测试共同约束。
 
 ---
 
@@ -152,7 +144,8 @@ PYTHONPATH=src python -m fashionrec train --help
 ```
 filter（train 拟合商品集）→ preprocess → split → model_train → hm_seq → hm_seq.item
     → 训练 SASRecF → valid 用户周 MAP@12 选 checkpoint → 导出 sasrecf_{valid,test}.csv
-    → 四路 Candidate 物化 → Weighted RRF / LightGBM 排序边界
+    → Baseline 四路 Candidate 物化 → Weighted RRF
+    → Industrial 扩展候选 → LightGBM LambdaRank
     → valid 权重搜索 → offline_eval（MAP@12）
 ```
 
@@ -169,12 +162,12 @@ filter（train 拟合商品集）→ preprocess → split → model_train → hm
 
 | 参数 | 值 | 位置 |
 |------|-----|------|
-| 数据窗口 | 6 周（4+1+1） | `filter.py` / `preprocess.py` / `split.py` |
-| 每用户最长行为 | 使用时截断至 100，不在切分前删行 | 序列 / 召回上下文 |
+| 数据窗口 | 28 周（26+1+1） | `configs/{baseline,industrial}/experiment.yaml` |
+| 每用户最长行为 | 使用时截断至 200，不在切分前删行 | 序列 / 召回上下文 |
 | checkpoint 粗筛 | 所有验证 epoch 中 RecBole-valid 指标 Top-5 | `configs/baseline/experiment.yaml` |
 | Baseline 序列最大长度 | 100 | `configs/baseline/models/sasrecf.yaml` |
 | Industrial 序列最大长度 | 100 | `configs/industrial/models/sasrecf.yaml` |
-| 召回 Top-K | 100 → 融合 Top-12 | 召回 + `offline_eval.py` |
+| 召回 Top-K | 每通道 200、union 500 → 最终 Top-12 | profile 配置 + `offline_eval.py` |
 | 主指标 | MAP@12 | `offline_eval.py` |
 
 ---
@@ -249,7 +242,7 @@ make evaluate RUN_ID=exp-001
 | `src/fashionrec/baseline/` | 旧协议数据、SASRecF、四路召回、Weighted RRF、评估与独立 DAG |
 | `src/fashionrec/industrial/` | 购物篮/PIT、扩展召回、SASRecF、LambdaRank、next-basket 评估与独立 DAG |
 | `src/fashionrec/shared/` | domain、interfaces、io、metrics、runtime 中立内核 |
-| `src/fashionrec/{data,recall,ranking,training,evaluation,candidates}/` | 旧 import 兼容 facade，不承载正式算法 |
+| `src/fashionrec/{data,recall,ranking,training,evaluation,candidates}/` | 旧 import 兼容 alias/facade，不承载正式算法；alias 不再保留同名 shadow 文件 |
 | `src/fashionrec/domain/` | 旧领域契约 import 兼容 facade |
 | `src/fashionrec/experiment/` | 配置、运行上下文与产物路径 |
 | `src/fashionrec/pipeline/` | 旧 profile pipeline 兼容入口；正式 DAG 在两应用内部 |

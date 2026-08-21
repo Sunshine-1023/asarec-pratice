@@ -25,11 +25,20 @@
 - [completed] 19. 将 industrial 购物篮/PIT、扩展召回、LambdaRank 与评估实现归入 industrial
 - [completed] 20. 将旧顶层算法目录收缩为兼容 facade，并加强依赖边界测试
 - [completed] 21. 运行全量回归、双链路 dry-run、文档与结构收口
-- [in_progress] 22. 审计两套 DAG、命令参数和产物依赖闭环
-- [pending] 23. 审计 Baseline 数据、训练、召回、RRF 与评估逻辑
-- [pending] 24. 审计 Industrial 购物篮/PIT、因果候选、LambdaRank 与评估逻辑
-- [pending] 25. 运行静态检查、定向回归并识别未覆盖的真实运行风险
-- [pending] 26. 汇总完整性结论、问题严重级别和建议修复顺序
+- [completed] 22. 审计两套 DAG、命令参数和产物依赖闭环
+- [completed] 23. 审计 Baseline 数据、训练、召回、RRF 与评估逻辑
+- [completed] 24. 审计 Industrial 购物篮/PIT、因果候选、LambdaRank 与评估逻辑
+- [completed] 25. 运行静态检查、定向回归并识别未覆盖的真实运行风险
+- [completed] 26. 汇总完整性结论、问题严重级别和建议修复顺序
+- [completed] 27. 扫描物理文件、兼容 facade 与双链路重复实现
+- [completed] 28. 检查函数/配置/测试/入口的重复与死代码
+- [completed] 29. 区分有意隔离、必要兼容和可删除冗余
+- [completed] 30. 输出冗余清单、风险和整理顺序
+- [completed] 31. 收缩 Baseline 数据协议并停止生成未消费的 ranking 特征
+- [completed] 32. 收缩 Baseline 召回与评估到四路召回 + Weighted RRF
+- [completed] 33. 整理 Industrial data 公共模块命名，移除 wrapper/build 双文件
+- [completed] 34. 清理安全可退役的死文件与过期兼容引用
+- [completed] 35. 运行定向回归、完整 make check、重复度复测与文档收口
 
 ## Decisions
 - `ranking.enabled: false` 时保持当前默认 RRF 链的执行成本和产物语义，不强制扫描额外事件/特征。
@@ -48,9 +57,12 @@
 - 允许共享无业务语义的领域契约、纯指标、通用算法实现和执行器；数据协议、命令入口、召回集合、模型配置、排序/评估协议与 DAG 必须归属各自应用。
 - 本轮按用户给出的物理目录落位；旧 `fashionrec.data/recall/ranking/training/evaluation` 只允许保留向新位置转发的兼容 facade，不再承载正式实现。
 - 为避免一次重构改变实验结果，baseline 与 industrial 可以各自拥有同内容的首版算法实现；后续优化分别演进，跨链共享仅限 `shared` 中无业务倾向的契约、I/O、指标和运行时。
+- 清理策略采用“删 Baseline 协议外能力，不回收两应用核心算法到 shared”；保留两套 SASRecF/三路基础召回/RRF 的独立所有权。
+- Baseline `hm_seq.item` 改为只读取 SASRecF 所需 8 个类别字段和序列中实际出现的 SKU，不再构建完整 ranking item table。
+- 旧 import 兼容继续通过 package-level `sys.modules` alias 提供；已被 alias 遮蔽的同名物理 facade 文件直接删除，避免第三份假实现。
 
 ## Next Step
-完成阶段 22：确认两条 DAG 每一步的输入、输出与下游消费关系。
+如需继续降低重复，只剩架构取舍：是否接受把两应用中仍字节级相同的 paths/time/checkpoint/union/coverage/manifest 等稳定实现下沉 shared；当前按“算法物理隔离”原则暂不合并。
 
 ## Errors Encountered
 | Error | Attempt | Resolution |
@@ -67,3 +79,6 @@
 | 直接运行 `python -m fashionrec.baseline|industrial --help` 找不到包 | 1 | 当前仓库未 editable install，后续 smoke check 使用项目既有的 `PYTHONPATH=src`/Make 环境；compileall 已通过 |
 | 兼容包首次只替换 `__path__`，同一 dataclass 被按两个模块名加载 | 1 | 改成 `sys.modules` 别名，使旧路径与应用路径引用同一模块对象，恢复类型相等和 monkeypatch 语义 |
 | 大批定向测试运行到 LightGBM predict 时原生层 segmentation fault | 1 | 定位为 Recall 兼容包过早加载 Torch；恢复 SASRecF 延迟导入后组合测试与完整 `make check` 均通过 |
+| 本轮尝试用 ruff/pyflakes 做静态冗余检查，但环境未安装 | 1 | 改用 AST import/reachability、源码哈希、规范化 diff 和运行时模块身份检查完成审计 |
+| 定向回归命令误写不存在的 `tests/test_fusion.py`、`tests/test_sequence_preparation.py`、`tests/test_build_item_features.py` | 1 | 用 `rg --files tests` 定位真实文件名后重新运行，相关测试全部通过 |
+| Industrial alias 迁移补丁首次按错误的字典顺序匹配 `data/__init__.py` | 1 | 原子补丁未产生改动；读取实际内容后按真实顺序重新应用成功 |

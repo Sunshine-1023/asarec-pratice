@@ -23,15 +23,6 @@ ACTIVITY_WEIGHTS: dict[ActivityTier, dict[str, float]] = {  # 各活跃度分层
     "cold_start": {"sequence": 0.00, "popular": 0.55, "category_popular": 0.30, "item2item": 0.15},  # 无历史
 }  # 权重模板字典结束
 
-# 四个成熟通道继续由 valid 搜索；新增通道使用稳定小权重，避免进入 union 后被静默置零。
-AUXILIARY_CHANNEL_WEIGHTS: dict[ActivityTier, dict[str, float]] = {
-    "high": {"repurchase": 0.25, "style": 0.10, "content": 0.05},
-    "medium": {"repurchase": 0.15, "style": 0.15, "content": 0.10},
-    "low": {"repurchase": 0.05, "style": 0.15, "content": 0.15},
-    "cold_start": {"repurchase": 0.00, "style": 0.00, "content": 0.20},
-}
-
-
 def classify_activity_tier(history_len: int) -> ActivityTier:  # 按历史购买次数划分活跃度
     if history_len <= 0:  # 冷启动
         return "cold_start"  # 返回冷启动分层
@@ -57,7 +48,6 @@ def get_channel_weights_for_user(  # 按用户历史长度返回通道权重
         "category_popular": template["category_popular"],  # 类别热门通道权重
         "item2item": template["item2item"],  # 商品共现通道权重
     }  # 成熟通道结束
-    weights.update(AUXILIARY_CHANNEL_WEIGHTS[tier])
     return weights
 
 

@@ -24,23 +24,6 @@ from fashionrec.baseline.recall.item2item import (
     build_item2item_index,
     recall_item2item,
 )
-from fashionrec.baseline.recall.content import (  # 内容召回
-    CONTENT_SEED_ITEMS,
-    ContentIndex,
-    build_content_index,
-    recall_content,
-)
-from fashionrec.baseline.recall.repurchase import (  # 复购召回
-    RepurchaseIndex,
-    build_repurchase_index,
-    recall_repurchase,
-)
-from fashionrec.baseline.recall.style import (  # 款式召回
-    STYLE_SEED_ITEMS,
-    StyleIndex,
-    build_style_index,
-    recall_style,
-)
 from fashionrec.baseline.recall.popular import (  # 热门召回
     PopularIndex,
     build_popular_index,
@@ -86,35 +69,6 @@ class Item2ItemChannel:
 
 
 @dataclass(slots=True)
-class RepurchaseChannel:
-    index: RepurchaseIndex
-    name: str = "repurchase"
-
-    def recall(self, user_id: str, history: list[str], top_k: int) -> RecallResult:
-        return recall_repurchase(user_id, history, self.index, top_k=top_k)
-
-
-@dataclass(slots=True)
-class StyleChannel:
-    index: StyleIndex
-    seed_items: int = STYLE_SEED_ITEMS
-    name: str = "style"
-
-    def recall(self, user_id: str, history: list[str], top_k: int) -> RecallResult:
-        return recall_style(history, self.index, seed_items=self.seed_items, top_k=top_k)
-
-
-@dataclass(slots=True)
-class ContentChannel:
-    index: ContentIndex
-    seed_items: int = CONTENT_SEED_ITEMS
-    name: str = "content"
-
-    def recall(self, user_id: str, history: list[str], top_k: int) -> RecallResult:
-        return recall_content(history, self.index, seed_items=self.seed_items, top_k=top_k)
-
-
-@dataclass(slots=True)
 class PrecomputedChannel:  # 模型召回等已落盘通道适配器
     name: str
     candidates_by_user: Mapping[str, list[tuple[str, float]]]
@@ -144,7 +98,7 @@ def build_rule_channel_registry(  # 一次构建索引，供全部用户复用
         if not path.exists():
             raise FileNotFoundError(f"Missing history file: {path}")
 
-    supported = {"popular", "category_popular", "item2item", "repurchase", "style", "content"}
+    supported = {"popular", "category_popular", "item2item"}
     requested = supported if channel_names is None else set(channel_names)
     unknown = sorted(requested.difference(supported))
     if unknown:
@@ -177,13 +131,6 @@ def build_rule_channel_registry(  # 一次构建索引，供全部用户复用
                 seed_items=item2item_seed_items,
             )
         )
-    if "repurchase" in requested:
-        channels.append(RepurchaseChannel(build_repurchase_index(paths, as_of=as_of)))
-    has_articles = articles_path is not None and Path(articles_path).is_file()
-    if "style" in requested and has_articles:
-        channels.append(StyleChannel(build_style_index(paths, articles_path=articles_path, as_of=as_of)))
-    if "content" in requested and has_articles:
-        channels.append(ContentChannel(build_content_index(articles_path, inter_paths=paths, as_of=as_of)))
     return {channel.name: channel for channel in channels}
 
 

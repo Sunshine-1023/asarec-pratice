@@ -13,10 +13,10 @@ from fashionrec.pipeline.registry import build_pipeline_steps
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = ROOT / "src" / "fashionrec"
 LEGACY_FACADE_FILES = {
-    "data": {"__init__.py", "command.py"},
-    "recall": {"__init__.py", "registry.py", "rule_recall_export.py", "sasrec_recall.py"},
+    "data": {"__init__.py"},
+    "recall": {"__init__.py", "rule_recall_export.py", "sasrec_recall.py"},
     "ranking": {"__init__.py"},
-    "training": {"__init__.py", "command.py", "checkpoint_command.py"},
+    "training": {"__init__.py"},
     "evaluation": {"__init__.py", "metrics.py"},
     "candidates": {"__init__.py"},
 }
@@ -83,6 +83,16 @@ def test_legacy_algorithm_namespaces_are_facades_only() -> None:
         assert actual_files == expected_files
 
 
+def test_alias_backed_legacy_modules_have_no_shadow_files() -> None:
+    for relative in (
+        "data/command.py",
+        "recall/registry.py",
+        "training/command.py",
+        "training/checkpoint_command.py",
+    ):
+        assert not (PACKAGE_ROOT / relative).exists(), relative
+
+
 def test_shared_kernel_never_imports_applications() -> None:
     imports = {
         module for path in (PACKAGE_ROOT / "shared").rglob("*.py") for module in _imports(path)
@@ -135,6 +145,34 @@ def test_formal_implementations_live_inside_applications() -> None:
     assert (PACKAGE_ROOT / "industrial" / "data" / "features.py").is_file()
     assert (PACKAGE_ROOT / "industrial" / "models" / "lambdarank" / "train.py").is_file()
     assert (PACKAGE_ROOT / "industrial" / "models" / "lambdarank" / "predict.py").is_file()
+
+
+def test_baseline_does_not_carry_industrial_only_implementations() -> None:
+    for relative in (
+        "data/build_events.py",
+        "data/build_baskets.py",
+        "data/labels.py",
+        "data/snapshots.py",
+        "data/user_features.py",
+        "data/cross_features.py",
+        "data/customer_features.py",
+        "data/item_features.py",
+        "recall/repurchase.py",
+        "recall/style.py",
+        "recall/content.py",
+        "evaluation/experiment_report.py",
+        "evaluation/candidate_diagnostics.py",
+        "evaluation/coverage_metrics.py",
+    ):
+        assert not (PACKAGE_ROOT / "baseline" / relative).exists(), relative
+
+
+def test_industrial_data_uses_canonical_event_and_basket_modules() -> None:
+    industrial_data = PACKAGE_ROOT / "industrial" / "data"
+    assert (industrial_data / "events.py").is_file()
+    assert (industrial_data / "baskets.py").is_file()
+    assert not (industrial_data / "build_events.py").exists()
+    assert not (industrial_data / "build_baskets.py").exists()
 
 
 def test_profile_dags_have_independent_ranker_commands(tmp_path: Path) -> None:

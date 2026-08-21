@@ -55,7 +55,7 @@ src/fashionrec/
 
 ```text
 baseline profile
-  数据准备
+  行级交互准备（不生成 ranking parquet / PIT 产物）
   → SASRecF 训练
   → valid 用户周 MAP@12 选择 checkpoint
   → SASRecF valid/test 召回
@@ -74,6 +74,8 @@ industrial profile
 ```
 
 两个应用入口分别创建固定 profile 的 `RunContext`，无需通过 `--profile` 选择。`baseline` 与 `industrial` 即使使用相同 run-id，也写入不同顶层命名空间。正式模式默认 `strict=True`：候选文件、序列召回等关键依赖缺失时直接失败；同一应用/run-id 的配置哈希变化也会拒绝续跑。
+
+Baseline 的代码面固定为最小协议：交互切分、购物日序列、SASRecF、Popular / Category Popular / Item2Item、Weighted RRF 和行级购买集合评估。events、basket parquet、next-basket labels、PIT 特征、Repurchase / Style / Content 与 LambdaRank 只存在于 Industrial。Industrial 的事件与购物篮实现直接位于 `data/events.py` 和 `data/baskets.py`，不再同时维护 `build_*` 镜像文件。
 
 单次运行目录：
 

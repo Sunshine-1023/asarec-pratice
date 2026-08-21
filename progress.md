@@ -46,3 +46,18 @@
 - 2026-08-20：两套 DAG 计划复验通过：Baseline 10 步、Industrial 14 步，所有子命令分别指向自身应用；相同 run-id 仍按 profile 隔离。
 - 2026-08-20：`make -n baseline/industrial`、旧/新模块对象身份检查、跨应用 import 扫描、shared 反向依赖扫描与 `git diff --check` 全部通过；未启动 H&M 全量训练。
 - 2026-08-20：开始结构迁移后的双链路只读复审；新增阶段 22–26，分别检查 DAG 闭环、Baseline 逻辑、Industrial 因果逻辑和真实运行风险。
+- 2026-08-20：完成 DAG/配置/产物路径初审；Baseline 10 步与 Industrial 14 步的文件依赖闭环成立，run/profile 冲突保护仍有效。
+- 2026-08-20：完成 Baseline 数据与 SASRecF 协议初审；同日去重、周级历史推进、train-only 用户资格和 valid-only checkpoint 选择逻辑成立。
+- 2026-08-20：完成 Industrial PIT/候选/LambdaRank/评估复审；确认 as-of 截断、标签窗口和固定候选评估成立，同时发现 SASRecF 训练/推理特征偏移、规则历史仍按交易行、cohort 特征人群口径错误。
+- 2026-08-20：确认全量可运行性尚未验证；raw 目录约 4.1GB、交易 CSV 约 3.2GB，现有候选交叉特征为一次性 pandas 加载和逐候选循环，属于主要工业化阻塞。
+- 2026-08-20：45 项定向回归通过；完整 `make check` 再次通过 251 项测试和全部 CLI smoke checks。阶段 22–26 收口，未修改算法实现。
+- 2026-08-21：完成代码重复/冗余只读审计；确认 55 个 Baseline/Industrial 同路径文件高度重复，约 9,123 行，另有 12 组 1,560 行字节级完全相同。
+- 2026-08-21：识别优先清理项：Baseline 仍携带 Industrial 数据/PIT/扩展召回/LambdaRank 对照代码，并默认生成未消费的 customer/item ranking parquet；旧统一 CLI facade 共 424 行且部分物理文件被 sys.modules alias 遮蔽。
+- 2026-08-21：19 项隔离/公开入口测试通过；compileall 和 git diff check 通过。未修改正式源码。
+- 2026-08-21：用户授权执行清理；新增阶段 31–35，边界为保留两应用物理隔离，优先删除 Baseline 协议外能力和真实运行冗余，再整理 Industrial 命名与兼容债务。
+- 2026-08-21：完成 Baseline 数据协议收缩；默认数据准备不再生成 customer/item ranking parquet，删除 events/labels/PIT 等协议外模块，并将购物日截断逻辑归入序列模块。
+- 2026-08-21：完成 Baseline 算法面收缩；召回固定三路规则 + SASRecF，RRF 不再携带扩展通道权重，离线评估和搜权不再包含 next-basket/LambdaRank 对照逻辑。
+- 2026-08-21：完成 Industrial events/baskets canonical 模块整理；删除 `build_*` 镜像文件并保持旧 import alias 身份一致。
+- 2026-08-21：删除被 alias 遮蔽的旧 data/recall/training facade 文件和无引用的旧 pipeline profile 子目录；新增结构回归防止冗余回流。
+- 2026-08-21：Baseline 紧凑 item catalog 只读取 8 个 SASRecF 类别字段和实际序列 SKU；继续删除未接入 DAG 的候选诊断副本后，Baseline 源码降至 5,488 行，较清理前减少 3,980 行。
+- 2026-08-21：完整 `make check` 通过，254 项测试与全部 CLI smoke checks 成功；重复度复测、双 profile Make dry-run、compileall 和 `git diff --check` 均通过。

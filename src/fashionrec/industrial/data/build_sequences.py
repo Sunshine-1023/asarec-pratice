@@ -8,7 +8,7 @@ from pathlib import Path  # 路径
 
 import pandas as pd  # 读取和排序交互
 
-from fashionrec.industrial.data.build_baskets import flatten_recent_baskets  # 按完整购物日截断历史
+from fashionrec.industrial.data.baskets import flatten_recent_baskets  # 按完整购物日截断历史
 from fashionrec.shared.domain.ids import canonical_item_id, canonical_user_id  # 统一 ID 契约
 
 

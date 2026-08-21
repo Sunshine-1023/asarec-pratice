@@ -7,12 +7,7 @@ from pathlib import Path  # 路径
 
 import pandas as pd  # 表格
 
-from fashionrec.baseline.data.customer_features import (  # 冷启动 age_bucket
-    DEFAULT_CUSTOMERS,
-    load_customers_table,
-    parse_age,
-)
-from fashionrec.baseline.data.item_features import UNKNOWN_TOKEN, clean_category_token  # 类别 token
+from fashionrec.baseline.data.build_item_features import UNKNOWN_TOKEN, clean_category_token  # 类别 token
 from fashionrec.shared.domain.ids import canonical_item_id, canonical_user_id  # ID
 from fashionrec.baseline.recall.window_scores import (  # 共享窗口逻辑
     DEFAULT_WINDOW_WEEKS,
@@ -24,6 +19,7 @@ from fashionrec.baseline.recall.window_scores import (  # 共享窗口逻辑
 
 
 DEFAULT_INTER_PATH = Path("data/processed/hm/hm.train.inter")  # 默认训练集
+DEFAULT_CUSTOMERS = Path("data/raw/customers.csv")
 POPULAR_RECALL_TOP_K = 50  # 全局热门召回 Top-K
 WINDOW_WEEKS = DEFAULT_WINDOW_WEEKS  # 1/2/4/12 周
 WINDOW_WEIGHTS = DEFAULT_WINDOW_WEIGHTS  # rank 归一化后加权
@@ -64,11 +60,32 @@ def _load_user_age_buckets(customers_path: Path | None) -> dict[str, str]:  # us
     customers_path = Path(customers_path)  # 规范化
     if not customers_path.is_file():  # 缺文件
         return {}  # 空
-    customers = load_customers_table(customers_path)  # 读表
+    customers = pd.read_csv(
+        customers_path,
+        usecols=lambda column: column in {"customer_id", "age"},
+        dtype={"customer_id": "string"},
+    )
+    if "customer_id" not in customers.columns:
+        raise ValueError("customers must contain customer_id")
     mapping: dict[str, str] = {}  # 结果
     for row in customers.to_dict(orient="records"):  # 逐用户
-        user_id = canonical_user_id(row["user_id"])  # 规范
-        _age, bucket, _missing = parse_age(row.get("age"))  # 分桶
+        user_id = canonical_user_id(row["customer_id"])  # 规范
+        age = pd.to_numeric(row.get("age"), errors="coerce")
+        bucket = UNKNOWN_TOKEN
+        if not pd.isna(age) and 0 <= float(age) <= 120:
+            rounded = int(round(float(age)))
+            for low, high, label in (
+                (0, 17, "under_18"),
+                (18, 24, "18_24"),
+                (25, 34, "25_34"),
+                (35, 44, "35_44"),
+                (45, 54, "45_54"),
+                (55, 64, "55_64"),
+                (65, 120, "65_plus"),
+            ):
+                if low <= rounded <= high:
+                    bucket = label
+                    break
         if bucket != UNKNOWN_TOKEN:  # 有效桶
             mapping[user_id] = bucket  # 记录
     return mapping  # 返回

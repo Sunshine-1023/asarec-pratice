@@ -7,8 +7,8 @@ import sys  # 导入系统模块以处理中断退出
 import time  # 导入时间模块以统计各步骤耗时
 from pathlib import Path  # 导入路径处理类
 
-from fashionrec.industrial.data.build_baskets import BASKET_SCHEMA_VERSION, build_baskets  # 可选按天购物篮
-from fashionrec.industrial.data.build_events import EVENT_SCHEMA_VERSION, build_events  # 可选 user-day-item 事件
+from fashionrec.industrial.data.baskets import BASKET_SCHEMA_VERSION, build_baskets  # 可选按天购物篮
+from fashionrec.industrial.data.events import EVENT_SCHEMA_VERSION, build_events  # 可选 user-day-item 事件
 from fashionrec.industrial.data.build_item_features import build_item_features  # 导入商品特征构建函数
 from fashionrec.industrial.data.user_features import USER_FEATURE_SCHEMA_VERSION, build_user_features  # as-of 行为特征
 from fashionrec.industrial.data.cross_features import CROSS_FEATURE_SCHEMA_VERSION, build_cross_features  # 用户×商品交叉

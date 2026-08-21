@@ -1,199 +1,165 @@
-"""Run multi-channel fusion and offline evaluation."""  # 运行多通道融合与离线评估
+"""Offline evaluation for the fixed four-channel Baseline RRF protocol."""
 
-from __future__ import annotations  # 启用延迟注解评估
+from __future__ import annotations
 
-import argparse  # 导入命令行参数解析模块
-import csv  # 导入 CSV 读写模块
-import json  # 导入 JSON 序列化模块
-import sys  # 导入系统模块用于路径注入
-from collections import defaultdict  # 导入带默认值的字典
-from dataclasses import dataclass  # 融合评估上下文
-from pathlib import Path  # 导入路径处理类
+import argparse
+import csv
+import json
+from collections import defaultdict
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
-import pandas as pd  # 导入 pandas 数据分析库
+import pandas as pd
 
-if __package__ is None or __package__ == "":  # 若以脚本方式直接运行
-    project_root = Path(__file__).resolve().parents[2]  # 定位项目根目录
-    if str(project_root) not in sys.path:  # 若根目录不在搜索路径中
-        sys.path.insert(0, str(project_root))  # 注入项目根目录到 sys.path
-
-from fashionrec.baseline.data.split import (  # 时间切分与防泄漏路径约定
-    TEST_INTER_FILE,  # 测试交互路径
-    TRAIN_INTER_FILE,  # 训练交互路径
-    VALID_INTER_FILE,  # 验证交互路径
-    assert_history_paths_allowed,  # 检查召回索引未混入标签周
-    history_paths_for_eval,  # 按评估划分选择历史路径
-)  # 切分模块导入结束
 from fashionrec.baseline.data.paths import ProcessedDataPaths
-from fashionrec.shared.metrics.ranking import hit_at_k, map_at_k, ndcg_at_k, recall_at_k  # 统一指标实现
-from fashionrec.shared.domain.ids import canonical_item_id, canonical_user_id  # 统一 ID 契约
-from fashionrec.baseline.ranking.fusion import (  # 导入融合相关函数
-    ACTIVITY_WEIGHTS,  # 默认活跃度权重模板
-    ActivityTier,  # 活跃度分层类型
-    build_user_history,  # 构建用户历史映射
-    classify_activity_tier,  # 按历史长度分类活跃度
-    get_channel_weights_for_user,  # 获取用户自适应通道权重
-    infer_sequence_channel,  # 从文件名推断序列通道名
-    load_channel_recall_csv,  # 加载通道召回 CSV
-)  # 融合模块导入结束
-from fashionrec.baseline.recall.category_popular import (  # 类别热门召回
-    CATEGORY_POPULAR_RECALL_TOP_K,  # 类别热门召回 Top-K 常量
-    SEED_ITEMS as CATEGORY_SEED_ITEMS,  # 类别热门种子商品数常量
-)  # 类别热门模块导入结束
-from fashionrec.baseline.recall.item2item import (  # item2item 共现召回
-    COOCCUR_WEEKS,  # 共现统计窗口（周）
-    ITEM2ITEM_RECALL_TOP_K,  # item2item 召回 Top-K 常量
-    SEED_ITEMS,  # 种子商品数常量
-    TOP_SIM_K,  # 每个商品保留相似邻居数
-)  # item2item 模块导入结束
-from fashionrec.baseline.evaluation.experiment_report import (  # 排序器对照报告
-    DEFAULT_ACTIVITY_TIERS,  # 与实验 YAML 一致的分层
-    compare_ranker_variants,  # gate
-    load_ranked_predictions,  # LambdaRank CSV
-    save_ranker_comparison,  # 落盘
-    score_named_variant,  # 计分
-    skipped_variant,  # 缺产物占位
+from fashionrec.baseline.data.split import (
+    TEST_INTER_FILE,
+    TRAIN_INTER_FILE,
+    VALID_INTER_FILE,
+    assert_history_paths_allowed,
+    history_paths_for_eval,
 )
-from fashionrec.baseline.recall.popular import POPULAR_RECALL_TOP_K  # 导入热门召回 Top-K 常量
-from fashionrec.baseline.recall.generator import generate_candidates, read_candidate_csv  # 与规则导出共享候选生成器
-from fashionrec.baseline.recall.channel_registry import PrecomputedChannel, build_rule_channel_registry  # 规则注册表与序列适配器
-from fashionrec.baseline.ranking.weighted_rrf import WeightedRRFRanker  # 排序层基线实现
+from fashionrec.baseline.ranking.fusion import (
+    ACTIVITY_WEIGHTS,
+    ActivityTier,
+    build_user_history,
+    classify_activity_tier,
+    get_channel_weights_for_user,
+    infer_sequence_channel,
+    load_channel_recall_csv,
+)
+from fashionrec.baseline.ranking.weighted_rrf import WeightedRRFRanker
+from fashionrec.baseline.recall.category_popular import (
+    CATEGORY_POPULAR_RECALL_TOP_K,
+    SEED_ITEMS as CATEGORY_SEED_ITEMS,
+)
+from fashionrec.baseline.recall.channel_registry import (
+    PrecomputedChannel,
+    build_rule_channel_registry,
+)
+from fashionrec.baseline.recall.generator import generate_candidates, read_candidate_csv
+from fashionrec.baseline.recall.item2item import (
+    COOCCUR_WEEKS,
+    ITEM2ITEM_RECALL_TOP_K,
+    SEED_ITEMS,
+    TOP_SIM_K,
+)
+from fashionrec.baseline.recall.popular import POPULAR_RECALL_TOP_K
+from fashionrec.shared.domain.ids import canonical_item_id, canonical_user_id
+from fashionrec.shared.metrics.ranking import hit_at_k, map_at_k, ndcg_at_k, recall_at_k
 
 
-TRAIN_INTER = TRAIN_INTER_FILE  # 训练集交互文件路径
-VALID_INTER = VALID_INTER_FILE  # 验证集交互文件路径
-TEST_INTER = TEST_INTER_FILE  # 测试集交互文件路径
-
-SASREC_RECALL_DIR = Path("outputs/recommendations")  # SASRec 召回结果目录
-FUSION_OUT_DIR = Path("outputs/recommendations")  # 融合推荐输出目录
-EVAL_OUT_DIR = Path("outputs/evaluation")  # 评估指标输出目录
-
-
-def default_sasrec_recall_csv(eval_split: str, prefer_sasrecf: bool = True) -> Path:  # 返回默认序列模型召回 CSV
-    if prefer_sasrecf:  # 优先 SASRecF
-        sasrecf_path = SASREC_RECALL_DIR / f"sasrecf_{eval_split}.csv"  # 构造 SASRecF 召回文件路径
-        if sasrecf_path.exists():  # 若 SASRecF 文件存在
-            return sasrecf_path  # 返回 SASRecF 路径
-    return SASREC_RECALL_DIR / f"sasrec_{eval_split}.csv"  # 回退 SASRec
+TRAIN_INTER = TRAIN_INTER_FILE
+VALID_INTER = VALID_INTER_FILE
+TEST_INTER = TEST_INTER_FILE
+SASREC_RECALL_DIR = Path("outputs/recommendations")
+FUSION_OUT_DIR = Path("outputs/recommendations")
+EVAL_OUT_DIR = Path("outputs/evaluation")
 
 
-def _load_targets(path: Path) -> dict[str, set[str]]:  # 加载评估集真实标签
-    df = pd.read_csv(  # 读取用户与物品列并保留 ID 文本
+def default_sasrec_recall_csv(eval_split: str, prefer_sasrecf: bool = True) -> Path:
+    if prefer_sasrecf:
+        path = SASREC_RECALL_DIR / f"sasrecf_{eval_split}.csv"
+        if path.exists():
+            return path
+    return SASREC_RECALL_DIR / f"sasrec_{eval_split}.csv"
+
+
+def _load_targets(path: Path) -> dict[str, set[str]]:
+    frame = pd.read_csv(
         path,
         sep="\t",
         usecols=["user_id:token", "item_id:token"],
         dtype={"user_id:token": "string", "item_id:token": "string"},
     )
-    df["user_id:token"] = df["user_id:token"].map(canonical_user_id)  # 统一用户 ID
-    df["item_id:token"] = df["item_id:token"].map(canonical_item_id)  # 统一商品 ID
-    grouped = (  # 按用户聚合真实物品集合
-        df.groupby("user_id:token")["item_id:token"]  # 按用户分组并取物品列
-        .apply(lambda s: {canonical_item_id(x) for x in s.tolist()})  # 将每组物品转为规范化集合
-        .to_dict()  # 转为字典
-    )  # 结束标签聚合
-    return grouped  # 返回用户到真实物品集合的映射
+    frame["user_id:token"] = frame["user_id:token"].map(canonical_user_id)
+    frame["item_id:token"] = frame["item_id:token"].map(canonical_item_id)
+    return (
+        frame.groupby("user_id:token")["item_id:token"]
+        .apply(lambda values: {canonical_item_id(value) for value in values})
+        .to_dict()
+    )
 
 
-def _load_next_basket_targets(labels_dir: Path, eval_split: str) -> dict[str, set[str]]:
-    """Load the de-duplicated purchase set from next-basket label parquet."""
-    if not labels_dir.exists():
-        raise FileNotFoundError(f"next-basket labels not found: {labels_dir}")
-    frame = pd.read_parquet(labels_dir)
-    required = {"user_id", "item_id", "split", "label_purchase"}
-    missing = required.difference(frame.columns)
-    if missing:
-        raise ValueError(f"next-basket labels missing columns: {sorted(missing)}")
-    frame = frame[frame["split"].astype(str).str.lower().eq(eval_split)]
-    frame = frame[frame["label_purchase"].fillna(False).astype(bool)].copy()
-    frame["user_id"] = frame["user_id"].map(canonical_user_id)
-    frame["item_id"] = frame["item_id"].map(canonical_item_id)
-    targets = frame.groupby("user_id")["item_id"].apply(lambda values: set(values)).to_dict()
-    if not targets:
-        raise ValueError(f"next-basket targets are empty for split={eval_split}: {labels_dir}")
-    return targets
+def _recall_at_k(actual: set[str], pred: list[str], k: int) -> float:
+    return recall_at_k(actual, pred, k)
 
 
-def _recall_at_k(actual: set[str], pred: list[str], k: int) -> float:  # 兼容旧内部名称
-    return recall_at_k(actual, pred, k)  # 转调统一实现
+def _hit_at_k(actual: set[str], pred: list[str], k: int) -> float:
+    return hit_at_k(actual, pred, k)
 
 
-def _hit_at_k(actual: set[str], pred: list[str], k: int) -> float:  # 兼容旧内部名称
-    return hit_at_k(actual, pred, k)  # 转调统一实现
+def _ndcg_at_k(actual: set[str], pred: list[str], k: int) -> float:
+    return ndcg_at_k(actual, pred, k)
 
 
-def _ndcg_at_k(actual: set[str], pred: list[str], k: int) -> float:  # 兼容旧内部名称
-    return ndcg_at_k(actual, pred, k)  # 转调统一实现
+def _map_at_k(actual: set[str], pred: list[str], k: int) -> float:
+    return map_at_k(actual, pred, k)
 
 
-def _map_at_k(actual: set[str], pred: list[str], k: int) -> float:  # 兼容旧内部名称
-    return map_at_k(actual, pred, k)  # 转调统一实现
+@dataclass
+class FusionEvalContext:
+    targets: dict[str, set[str]]
+    users: list[dict[str, Any]]
+    sequence_channel: str
+    final_top_k: int
 
 
-@dataclass  # 数据类装饰器
-class FusionEvalContext:  # 预计算召回候选，供权重搜索复用
-    targets: dict[str, set[str]]  # 用户真实标签
-    users: list[dict]  # 每用户 history / channel_candidates
-    sequence_channel: str  # 序列模型通道名
-    final_top_k: int  # 最终 Top-K
+def build_fusion_eval_context(
+    eval_split: str = "valid",
+    recall_top_k: int = 100,
+    popular_recall_top_k: int = POPULAR_RECALL_TOP_K,
+    category_popular_recall_top_k: int = CATEGORY_POPULAR_RECALL_TOP_K,
+    item2item_recall_top_k: int = ITEM2ITEM_RECALL_TOP_K,
+    item2item_cooccur_weeks: int = COOCCUR_WEEKS,
+    item2item_top_sim_k: int = TOP_SIM_K,
+    item2item_seed_items: int = SEED_ITEMS,
+    category_popular_seed_items: int = CATEGORY_SEED_ITEMS,
+    final_top_k: int = 12,
+    sasrec_recall_csv: str | Path | None = None,
+    sequence_channel: str | None = None,
+    strict: bool = False,
+    candidate_csv: str | Path | None = None,
+    max_user_history: int = 100,
+    data_dir: str | Path | None = None,
+) -> FusionEvalContext:
+    if eval_split not in {"valid", "test"}:
+        raise ValueError("eval_split must be 'valid' or 'test'")
 
-
-def build_fusion_eval_context(  # 构建融合评估上下文（召回只算一次）
-    eval_split: str = "valid",  # 评估划分：valid 或 test
-    recall_top_k: int = 100,  # 序列模型召回 Top-K
-    popular_recall_top_k: int = POPULAR_RECALL_TOP_K,  # 全局热门召回 Top-K
-    category_popular_recall_top_k: int = CATEGORY_POPULAR_RECALL_TOP_K,  # 类别热门召回 Top-K
-    item2item_recall_top_k: int = ITEM2ITEM_RECALL_TOP_K,  # item2item 召回 Top-K
-    item2item_cooccur_weeks: int = COOCCUR_WEEKS,  # item2item 共现统计窗口（周）
-    item2item_top_sim_k: int = TOP_SIM_K,  # 每个商品保留相似邻居数
-    item2item_seed_items: int = SEED_ITEMS,  # item2item 种子商品数
-    category_popular_seed_items: int = CATEGORY_SEED_ITEMS,  # 类别热门种子商品数
-    final_top_k: int = 12,  # 融合后最终 Top-K
-    sasrec_recall_csv: str | Path | None = None,  # 可选序列模型召回 CSV 路径
-    sequence_channel: str | None = None,  # 序列通道名（sasrec / sasrecf），默认从 CSV 推断
-    strict: bool = False,  # 正式运行可要求缺失依赖立即失败
-    candidate_csv: str | Path | None = None,  # 可直接消费已物化四路候选
-    max_user_history: int = 100,  # 用户分层与排除已购使用的历史上限
-    data_dir: str | Path | None = None,  # processed dataset root
-    labels_dir: str | Path | None = None,  # 新协议 next-basket 标签；未给时保持旧口径
-) -> FusionEvalContext:  # 返回融合评估上下文
-    if eval_split not in {"valid", "test"}:  # 校验评估划分参数
-        raise ValueError("eval_split must be 'valid' or 'test'")  # 非法划分时抛出异常
-
-    sasrec_recall_csv = (  # 确定序列模型召回文件路径
-        Path(sasrec_recall_csv)  # 若用户提供路径则转为 Path
-        if sasrec_recall_csv is not None  # 判断路径是否非空
-        else default_sasrec_recall_csv(eval_split)  # 否则使用默认路径
-    )  # 结束路径选择
+    recall_path = Path(sasrec_recall_csv) if sasrec_recall_csv else default_sasrec_recall_csv(eval_split)
     data_paths = ProcessedDataPaths.from_root(data_dir)
     eval_path = data_paths.valid_inter if eval_split == "valid" else data_paths.test_inter
     history_paths = history_paths_for_eval(eval_split, data_paths.train_inter, data_paths.valid_inter)
-    assert_history_paths_allowed(eval_split, history_paths, data_paths.train_inter, data_paths.valid_inter, data_paths.test_inter)
-
-    user_history_map = build_user_history(*history_paths, max_user_history=max_user_history)  # 构建统一长度的用户历史
-    targets = (
-        _load_next_basket_targets(Path(labels_dir), eval_split)
-        if labels_dir is not None
-        else _load_targets(eval_path)
+    assert_history_paths_allowed(
+        eval_split,
+        history_paths,
+        data_paths.train_inter,
+        data_paths.valid_inter,
+        data_paths.test_inter,
     )
-    if candidate_csv is not None:  # 正式流程优先消费已物化候选
+    user_history = build_user_history(*history_paths, max_user_history=max_user_history)
+    targets = _load_targets(eval_path)
+
+    if candidate_csv is not None:
         candidate_path = Path(candidate_csv)
         if strict and not candidate_path.exists():
             raise FileNotFoundError(f"Missing required candidate artifact: {candidate_path}")
-        generated = read_candidate_csv(candidate_path) if candidate_path.exists() else []
-        bad_splits = sorted({candidate.split for candidate in generated if candidate.split != eval_split})
+        candidates = read_candidate_csv(candidate_path) if candidate_path.exists() else []
+        bad_splits = sorted({row.split for row in candidates if row.split != eval_split})
         if bad_splits:
             raise ValueError(f"Candidate artifact split mismatch: expected={eval_split}, found={bad_splits}")
-        sequence_names = sorted({candidate.channel for candidate in generated if candidate.channel.startswith("sasrec")})
-        resolved_sequence_channel = sequence_channel or (sequence_names[0] if sequence_names else "sasrecf")
-        if strict and not generated:
+        sequence_names = sorted({row.channel for row in candidates if row.channel.startswith("sasrec")})
+        resolved_sequence = sequence_channel or (sequence_names[0] if sequence_names else "sasrecf")
+        if strict and not candidates:
             raise ValueError(f"Candidate artifact is empty: {candidate_path}")
         if strict and not sequence_names:
             raise ValueError(f"Candidate artifact has no SASRec/SASRecF channel: {candidate_path}")
-    else:  # 兼容旧命令：现场生成相同 Candidate schema
-        if strict and not sasrec_recall_csv.exists():
-            raise FileNotFoundError(f"Missing required sequence recall: {sasrec_recall_csv}")
-        sasrec_map = load_channel_recall_csv(sasrec_recall_csv)
-        resolved_sequence_channel = sequence_channel or infer_sequence_channel(sasrec_recall_csv)
+    else:
+        if strict and not recall_path.exists():
+            raise FileNotFoundError(f"Missing required sequence recall: {recall_path}")
+        sequence_map = load_channel_recall_csv(recall_path)
+        resolved_sequence = sequence_channel or infer_sequence_channel(recall_path)
         registry = build_rule_channel_registry(
             history_paths,
             item2item_cooccur_weeks=item2item_cooccur_weeks,
@@ -202,55 +168,48 @@ def build_fusion_eval_context(  # 构建融合评估上下文（召回只算一�
             category_seed_items=category_popular_seed_items,
             item_file=data_paths.seq_item,
         )
-        registry[resolved_sequence_channel] = PrecomputedChannel(
-            resolved_sequence_channel,
-            {user: [(item, score) for item, score, _ in rows] for user, rows in sasrec_map.items()},
+        registry[resolved_sequence] = PrecomputedChannel(
+            resolved_sequence,
+            {user: [(item, score) for item, score, _rank in rows] for user, rows in sequence_map.items()},
         )
-        generated = generate_candidates(
+        candidates = generate_candidates(
             eval_users=targets,
-            user_history=user_history_map,
+            user_history=user_history,
             channels=registry,
             split=eval_split,
             top_k_by_channel={
                 "popular": popular_recall_top_k,
                 "category_popular": category_popular_recall_top_k,
                 "item2item": item2item_recall_top_k,
-                resolved_sequence_channel: recall_top_k,
+                resolved_sequence: recall_top_k,
             },
         )
-    candidates_by_user: dict[str, dict[str, list[tuple[str, float]]]] = defaultdict(lambda: defaultdict(list))
-    for candidate in generated:  # Candidate schema 转为兼容的融合输入
-        candidates_by_user[candidate.user_id][candidate.channel].append((candidate.item_id, candidate.score))
 
-    users: list[dict] = []  # 初始化用户评估数据列表
-    for user_id, actual_items in targets.items():  # 遍历每个评估用户
-        history = user_history_map.get(user_id, [])  # 获取用户历史序列
-        history_set = set(history)  # 转为集合
-        channel_candidates = dict(candidates_by_user.get(user_id, {}))  # 使用统一生成的候选
-        users.append(  # 追加用户评估数据
-            {  # 用户数据字典
-                "user_id": user_id,  # 用户 ID
-                "actual_items": actual_items,  # 真实标签集合
-                "history": history,  # 历史序列
-                "history_set": history_set,  # 历史集合
-                "channel_candidates": channel_candidates,  # 各通道候选
-            }  # 用户数据字典结束
-        )  # 追加完成
+    by_user: dict[str, dict[str, list[tuple[str, float]]]] = defaultdict(lambda: defaultdict(list))
+    for candidate in candidates:
+        by_user[candidate.user_id][candidate.channel].append((candidate.item_id, candidate.score))
 
-    return FusionEvalContext(  # 构建并返回评估上下文
-        targets=targets,  # 用户真实标签
-        users=users,  # 用户评估数据列表
-        sequence_channel=resolved_sequence_channel,  # 序列模型通道名
-        final_top_k=final_top_k,  # 最终 Top-K
-    )  # 上下文构建完成
+    users = []
+    for user_id, actual_items in targets.items():
+        history = user_history.get(user_id, [])
+        users.append(
+            {
+                "user_id": user_id,
+                "actual_items": actual_items,
+                "history": history,
+                "history_set": set(history),
+                "channel_candidates": dict(by_user.get(user_id, {})),
+            }
+        )
+    return FusionEvalContext(targets, users, resolved_sequence, final_top_k)
 
 
-def _rrf_predictions(  # 同一候选集上跑 Weighted RRF
+def evaluate_fusion_map_at_k(
     context: FusionEvalContext,
     activity_weights: dict[ActivityTier, dict[str, float]],
     exclude_seen: bool = False,
-) -> dict[str, list[str]]:
-    predictions: dict[str, list[str]] = {}
+) -> float:
+    scores = []
     for row in context.users:
         weights = get_channel_weights_for_user(
             len(row["history"]),
@@ -263,179 +222,38 @@ def _rrf_predictions(  # 同一候选集上跑 Weighted RRF
             channel_candidates=row["channel_candidates"],
             top_k=context.final_top_k,
         )
-        predictions[row["user_id"]] = [item.item_id for item in ranked]
-    return predictions
+        scores.append(map_at_k(row["actual_items"], [item.item_id for item in ranked], context.final_top_k))
+    return float(sum(scores) / len(scores)) if scores else 0.0
 
 
-def _scoring_users(context: FusionEvalContext, predictions: dict[str, list[str]]) -> list[dict]:
-    return [
-        {
-            "user_id": row["user_id"],
-            "actual": row["actual_items"],
-            "pred": list(predictions.get(row["user_id"], [])),
-            "history_len": len(row["history"]),
-        }
-        for row in context.users
-    ]
-
-
-def collect_ranker_comparison_variants(  # 固定四组对照；缺产物 skip，不失败
-    context: FusionEvalContext,
-    *,
-    activity_tiers: dict[str, tuple[int, int | None]] | None = None,
-    searched_weights: dict[ActivityTier, dict[str, float]] | None = None,
-    ranker_predictions: dict[str, list[str]] | None = None,
-    rerank_predictions: dict[str, list[str]] | None = None,
+def evaluate_fusion(
+    eval_split: str = "valid",
+    recall_top_k: int = 100,
+    popular_recall_top_k: int = POPULAR_RECALL_TOP_K,
+    category_popular_recall_top_k: int = CATEGORY_POPULAR_RECALL_TOP_K,
+    final_top_k: int = 12,
+    popular_weight: float = 0.15,
+    category_popular_weight: float = 0.15,
+    item2item_weight: float = 0.25,
+    sasrec_weight: float = 0.45,
+    item2item_recall_top_k: int = ITEM2ITEM_RECALL_TOP_K,
+    item2item_cooccur_weeks: int = COOCCUR_WEEKS,
+    item2item_top_sim_k: int = TOP_SIM_K,
+    item2item_seed_items: int = SEED_ITEMS,
+    category_popular_seed_items: int = CATEGORY_SEED_ITEMS,
+    sasrec_recall_csv: str | Path | None = None,
+    adaptive_weights: bool = True,
+    activity_weights: dict[ActivityTier, dict[str, float]] | None = None,
     exclude_seen: bool = False,
-    lambdarank_skip_reason: str = "no ranker scored csv",
-) -> list[dict]:
-    tiers = activity_tiers or DEFAULT_ACTIVITY_TIERS
-    k = context.final_top_k
-    variants: list[dict] = [
-        score_named_variant(
-            "fusion_default_weights",
-            _scoring_users(context, _rrf_predictions(context, ACTIVITY_WEIGHTS, exclude_seen)),
-            k,
-            tiers,
-            extra={"weights_source": "ACTIVITY_WEIGHTS"},
-        )
-    ]
-    if searched_weights is not None:
-        variants.append(
-            score_named_variant(
-                "fusion_valid_search_weights",
-                _scoring_users(context, _rrf_predictions(context, searched_weights, exclude_seen)),
-                k,
-                tiers,
-                extra={"weights_source": "weights_json"},
-            )
-        )
-    else:
-        variants.append(
-            skipped_variant(
-                "fusion_valid_search_weights",
-                "no frozen weights json; refusing to search on this split",
-            )
-        )
-    if ranker_predictions is not None:
-        variants.append(
-            score_named_variant(
-                "lambdarank",
-                _scoring_users(context, ranker_predictions),
-                k,
-                tiers,
-                extra={"ranker": "lightgbm_lambdarank"},
-            )
-        )
-    else:
-        variants.append(skipped_variant("lambdarank", lambdarank_skip_reason))
-    if rerank_predictions is not None:
-        variants.append(
-            score_named_variant(
-                "lambdarank_rerank",
-                _scoring_users(context, rerank_predictions),
-                k,
-                tiers,
-                extra={"ranker": "lightgbm_lambdarank_rerank"},
-            )
-        )
-    else:
-        variants.append(skipped_variant("lambdarank_rerank", "business rerank is stage 5; not implemented"))
-    return variants
-
-
-def write_ranker_comparison_report(  # 对照 + gate JSON
-    context: FusionEvalContext,
-    evaluation_dir: str | Path,
-    eval_split: str,
-    *,
-    activity_tiers: dict[str, tuple[int, int | None]] | None = None,
-    searched_weights: dict[ActivityTier, dict[str, float]] | None = None,
-    ranker_scored_csv: str | Path | None = None,
-    exclude_seen: bool = False,
-) -> tuple[Path, dict]:
-    ranker_predictions = None
-    skip_reason = "no ranker scored csv"
-    if ranker_scored_csv is not None:
-        scored_path = Path(ranker_scored_csv)
-        if scored_path.is_file():
-            ranker_predictions = load_ranked_predictions(scored_path, top_k=context.final_top_k)
-        else:
-            skip_reason = f"ranker scored csv not found: {scored_path}"
-    variants = collect_ranker_comparison_variants(
-        context,
-        activity_tiers=activity_tiers,
-        searched_weights=searched_weights,
-        ranker_predictions=ranker_predictions,
-        exclude_seen=exclude_seen,
-        lambdarank_skip_reason=skip_reason,
-    )
-    comparison = compare_ranker_variants(variants, k=context.final_top_k)
-    comparison["eval_split"] = eval_split
-    comparison["ranker_scored_csv"] = str(ranker_scored_csv) if ranker_scored_csv is not None else None
-    output_path = Path(evaluation_dir) / f"ranker_comparison_{eval_split}.json"
-    save_ranker_comparison(output_path, comparison)
-    return output_path, comparison
-
-
-def evaluate_fusion_map_at_k(  # 给定权重模板计算平均 MAP@K
-    context: FusionEvalContext,  # 预计算的融合评估上下文
-    activity_weights: dict[ActivityTier, dict[str, float]],  # 各分层通道权重模板
-    exclude_seen: bool = False,  # 融合时是否排除历史已购
-) -> float:  # 返回平均 MAP@K
-    maps: list[float] = []  # 初始化各用户 MAP 列表
-    for row in context.users:  # 遍历每个用户
-        user_weights = get_channel_weights_for_user(  # 按历史长度获取用户通道权重
-            len(row["history"]),  # 用户历史长度
-            context.sequence_channel,  # 序列模型通道名
-            activity_weights=activity_weights,  # 传入分层权重模板
-        )  # 权重获取完成
-        ranked = WeightedRRFRanker(user_weights, exclude_seen=exclude_seen).rank(  # 通过排序接口执行 RRF
-            user_id=row["user_id"],  # 用户 ID
-            user_history=row["history_set"],  # 用户历史集合
-            channel_candidates=row["channel_candidates"],  # 各通道候选
-            top_k=context.final_top_k,  # 最终 Top-K
-        )  # 排序完成
-        pred_items = [item.item_id for item in ranked]  # 提取预测物品 ID 列表
-        maps.append(_map_at_k(row["actual_items"], pred_items, context.final_top_k))  # 累计 MAP@K
-    return float(sum(maps) / len(maps)) if maps else 0.0  # 返回平均 MAP@K
-
-
-def evaluate_fusion(  # 执行多通道融合并评估
-    eval_split: str = "valid",  # 评估划分：valid 或 test
-    recall_top_k: int = 100,  # 序列模型召回 Top-K
-    popular_recall_top_k: int = POPULAR_RECALL_TOP_K,  # 全局热门召回 Top-K
-    category_popular_recall_top_k: int = CATEGORY_POPULAR_RECALL_TOP_K,  # 类别热门召回 Top-K
-    final_top_k: int = 12,  # 融合后最终 Top-K
-    popular_weight: float = 0.15,  # 固定权重：热门通道
-    category_popular_weight: float = 0.15,  # 固定权重：类别热门通道
-    item2item_weight: float = 0.25,  # 固定权重：item2item 通道
-    sasrec_weight: float = 0.45,  # 固定权重：序列模型通道
-    item2item_recall_top_k: int = ITEM2ITEM_RECALL_TOP_K,  # item2item 召回 Top-K
-    item2item_cooccur_weeks: int = COOCCUR_WEEKS,  # item2item 共现统计窗口（周）
-    item2item_top_sim_k: int = TOP_SIM_K,  # 每个商品保留相似邻居数
-    item2item_seed_items: int = SEED_ITEMS,  # 种子商品数（最近 N 个购买）
-    category_popular_seed_items: int = CATEGORY_SEED_ITEMS,  # 类别热门种子商品数
-    sasrec_recall_csv: str | Path | None = None,  # 可选序列模型召回 CSV 路径
-    adaptive_weights: bool = True,  # 是否按用户历史长度自适应权重
-    activity_weights: dict[ActivityTier, dict[str, float]] | None = None,  # 自定义分层权重
-    exclude_seen: bool = False,  # 融合时是否排除历史已购
-    sequence_channel: str | None = None,  # 序列通道名（sasrec / sasrecf），默认从 CSV 推断
-    output_dir: str | Path = FUSION_OUT_DIR,  # 推荐输出目录，支持 run-scoped 路径
-    evaluation_dir: str | Path = EVAL_OUT_DIR,  # 指标输出目录，支持 run-scoped 路径
-    strict: bool = False,  # 严格模式禁止缺失序列召回
-    candidate_csv: str | Path | None = None,  # 已物化候选输入
-    max_user_history: int = 100,  # 用户分层与排除已购使用的历史上限
-    data_dir: str | Path | None = None,  # processed dataset root
-    ranker_scored_csv: str | Path | None = None,  # 可选 LambdaRank 打分 CSV；缺文件则 skip
-    compare_rankers: bool = True,  # 写出 RRF vs LambdaRank 对照，不替换默认 RRF 输出
-    labels_dir: str | Path | None = None,  # 可选 next-basket 标签根
-) -> tuple[Path, Path, dict[str, float]]:  # 返回推荐文件路径、指标文件路径与指标字典
-    """Run multi-channel recall fusion and evaluate on valid/test split."""  # 在 valid/test 划分上运行多通道召回融合并评估
-    if eval_split not in {"valid", "test"}:  # 校验评估划分参数
-        raise ValueError("eval_split must be 'valid' or 'test'")  # 非法划分时抛出异常
-
-    context = build_fusion_eval_context(  # 召回、候选与权重搜索共用同一上下文构建
+    sequence_channel: str | None = None,
+    output_dir: str | Path = FUSION_OUT_DIR,
+    evaluation_dir: str | Path = EVAL_OUT_DIR,
+    strict: bool = False,
+    candidate_csv: str | Path | None = None,
+    max_user_history: int = 100,
+    data_dir: str | Path | None = None,
+) -> tuple[Path, Path, dict[str, Any]]:
+    context = build_fusion_eval_context(
         eval_split=eval_split,
         recall_top_k=recall_top_k,
         popular_recall_top_k=popular_recall_top_k,
@@ -452,242 +270,170 @@ def evaluate_fusion(  # 执行多通道融合并评估
         candidate_csv=candidate_csv,
         max_user_history=max_user_history,
         data_dir=data_dir,
-        labels_dir=labels_dir,
     )
-    targets = context.targets
-    resolved_sequence_channel = context.sequence_channel
-    weights_table = activity_weights or ACTIVITY_WEIGHTS  # 使用的分层权重表
+    weights_table = activity_weights or ACTIVITY_WEIGHTS
+    fixed_weights = {
+        "popular": popular_weight,
+        "category_popular": category_popular_weight,
+        "item2item": item2item_weight,
+        context.sequence_channel: sasrec_weight,
+    }
+    metric_values = {"map": [], "recall": [], "ndcg": [], "hit": []}
+    tier_counts: dict[str, int] = defaultdict(int)
+    recommendation_rows = []
 
-    fixed_weights = {  # 固定权重（adaptive_weights=False 时使用）
-        "popular": popular_weight,  # 热门通道权重
-        "category_popular": category_popular_weight,  # 类别热门通道权重
-        "item2item": item2item_weight,  # item2item 通道权重
-        resolved_sequence_channel: sasrec_weight,  # 序列模型通道权重
-    }  # 固定权重字典结束
-
-    tier_counts: dict[str, int] = defaultdict(int)  # 各活跃度分层用户数
-
-    resolved_output_dir = Path(output_dir)  # 解析推荐输出目录
-    resolved_evaluation_dir = Path(evaluation_dir)  # 解析评估输出目录
-    resolved_output_dir.mkdir(parents=True, exist_ok=True)  # 创建融合输出目录
-    resolved_evaluation_dir.mkdir(parents=True, exist_ok=True)  # 创建评估输出目录
-    rec_out = resolved_output_dir / f"fusion_{eval_split}.csv"  # 融合推荐结果输出路径
-    metric_out = resolved_evaluation_dir / f"fusion_{eval_split}_metrics.json"  # 评估指标输出路径
-
-    maps, recalls, ndcgs, hits = [], [], [], []  # 初始化各指标累计列表
-    rows = []  # 初始化推荐结果行列表
-
-    for row in context.users:  # 遍历统一候选上下文
-        user_id = row["user_id"]
-        actual_items = row["actual_items"]
-        history = row["history"]
-        history_set = row["history_set"]
-
-        if adaptive_weights:  # 按历史长度自适应权重
-            tier = classify_activity_tier(len(history))  # 判定活跃度
-            tier_counts[tier] += 1  # 统计分层人数
-            user_weights = get_channel_weights_for_user(  # 按历史长度获取用户通道权重
-                len(history),  # 用户历史长度
-                resolved_sequence_channel,  # 序列模型通道名
-                activity_weights=weights_table,  # 传入分层权重表
-            )  # 权重获取完成
-        else:  # 全用户统一权重
-            user_weights = fixed_weights  # 使用固定权重
-
-        ranked = WeightedRRFRanker(user_weights, exclude_seen=exclude_seen).rank(  # 融合基线排序器
-            user_id=user_id,  # 传入用户 ID
-            user_history=history_set,  # 传入用户历史
-            channel_candidates=row["channel_candidates"],  # 使用统一 Candidate 生成结果
-            top_k=final_top_k,  # 指定最终 Top-K
-        )  # 结束排序调用
-
-        pred_items = [item.item_id for item in ranked]  # 提取预测物品 ID 列表
-        maps.append(_map_at_k(actual_items, pred_items, final_top_k))  # 累计 MAP@K
-        recalls.append(_recall_at_k(actual_items, pred_items, final_top_k))  # 累计 Recall@K
-        ndcgs.append(_ndcg_at_k(actual_items, pred_items, final_top_k))  # 累计 NDCG@K
-        hits.append(_hit_at_k(actual_items, pred_items, final_top_k))  # 累计 Hit@K
-
-        for item in ranked:  # 遍历排序结果并记录排名
-            rows.append(  # 追加一行推荐记录
-                {  # 构建推荐行字典
-                    "user_id": user_id,  # 用户 ID
-                    "item_id": item.item_id,  # 物品 ID
-                    "score": item.score,  # 融合得分
-                    "rank": item.rank,  # 推荐排名
-                    "split": eval_split,  # 评估划分
-                    "channel": "fusion",  # 渠道标识为融合
-                }  # 结束行字典
-            )  # 结束追加
-
-    with rec_out.open("w", newline="", encoding="utf-8") as f:  # 打开推荐结果输出文件
-        writer = csv.DictWriter(  # 创建字典 CSV 写入器
-            f,  # 绑定输出文件
-            fieldnames=["user_id", "item_id", "score", "rank", "split", "channel"],  # 指定列名
-        )  # 结束写入器创建
-        writer.writeheader()  # 写入表头
-        writer.writerows(rows)  # 写入全部推荐行
-
-    metrics = {  # 汇总评估指标
-        f"MAP@{final_top_k}": float(sum(maps) / len(maps)) if maps else 0.0,  # 平均 MAP@K
-        f"Recall@{final_top_k}": float(sum(recalls) / len(recalls)) if recalls else 0.0,  # 平均 Recall@K
-        f"NDCG@{final_top_k}": float(sum(ndcgs) / len(ndcgs)) if ndcgs else 0.0,  # 平均 NDCG@K
-        f"Hit@{final_top_k}": float(sum(hits) / len(hits)) if hits else 0.0,  # 平均 Hit@K
-        "users_evaluated": len(targets),  # 评估用户数量
-        "adaptive_weights": adaptive_weights,  # 是否启用自适应权重
-        "exclude_seen": exclude_seen,  # 是否排除已购商品
-        "sequence_channel": resolved_sequence_channel,  # 序列模型通道名
-        "activity_weights": (  # 自适应权重详情
-            {tier: dict(w) for tier, w in weights_table.items()} if adaptive_weights else None  # 各分层权重或 None
-        ),  # 自适应权重详情结束
-        "popular_recall_top_k": popular_recall_top_k,  # 热门召回 Top-K
-        "category_popular_recall_top_k": category_popular_recall_top_k,  # 类别热门召回 Top-K
-        "recall_top_k": recall_top_k,  # 序列模型召回 Top-K
-        "item2item_recall_top_k": item2item_recall_top_k,  # item2item 召回 Top-K
-        "item2item_cooccur_weeks": item2item_cooccur_weeks,  # item2item 共现统计窗口（周）
-        "item2item_top_sim_k": item2item_top_sim_k,  # 每个商品保留相似邻居数
-        "item2item_seed_items": item2item_seed_items,  # item2item 种子商品数
-        "category_popular_seed_items": category_popular_seed_items,  # 类别热门种子商品数
-        "weights": fixed_weights if not adaptive_weights else "per-user by activity tier",  # 权重说明
-        "activity_tier_counts": dict(tier_counts) if adaptive_weights else {},  # 各分层用户数
-        "eval_split": eval_split,  # 评估划分名称
-    }  # 结束指标字典
-
-    if compare_rankers:  # 对照不改变 fusion_{split}.csv；gate 只写建议
-        comparison_path, comparison = write_ranker_comparison_report(
-            context,
-            resolved_evaluation_dir,
-            eval_split,
-            searched_weights=activity_weights,
-            ranker_scored_csv=ranker_scored_csv,
-            exclude_seen=exclude_seen,
+    for row in context.users:
+        if adaptive_weights:
+            tier = classify_activity_tier(len(row["history"]))
+            tier_counts[tier] += 1
+            weights = get_channel_weights_for_user(
+                len(row["history"]),
+                context.sequence_channel,
+                activity_weights=weights_table,
+            )
+        else:
+            weights = fixed_weights
+        ranked = WeightedRRFRanker(weights, exclude_seen=exclude_seen).rank(
+            user_id=row["user_id"],
+            user_history=row["history_set"],
+            channel_candidates=row["channel_candidates"],
+            top_k=final_top_k,
         )
-        metrics["ranker_comparison"] = str(comparison_path)
-        metrics["replace_default_ranker"] = bool(comparison.get("replace_default_ranker"))
-        print(f"Saved ranker comparison: {comparison_path}")
+        predicted = [item.item_id for item in ranked]
+        actual = row["actual_items"]
+        metric_values["map"].append(map_at_k(actual, predicted, final_top_k))
+        metric_values["recall"].append(recall_at_k(actual, predicted, final_top_k))
+        metric_values["ndcg"].append(ndcg_at_k(actual, predicted, final_top_k))
+        metric_values["hit"].append(hit_at_k(actual, predicted, final_top_k))
+        recommendation_rows.extend(
+            {
+                "user_id": row["user_id"],
+                "item_id": item.item_id,
+                "score": item.score,
+                "rank": item.rank,
+                "split": eval_split,
+                "channel": "fusion",
+            }
+            for item in ranked
+        )
 
-    metric_out.write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")  # 将指标写入 JSON 文件
+    resolved_output = Path(output_dir)
+    resolved_evaluation = Path(evaluation_dir)
+    resolved_output.mkdir(parents=True, exist_ok=True)
+    resolved_evaluation.mkdir(parents=True, exist_ok=True)
+    rec_out = resolved_output / f"fusion_{eval_split}.csv"
+    metric_out = resolved_evaluation / f"fusion_{eval_split}_metrics.json"
+    with rec_out.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["user_id", "item_id", "score", "rank", "split", "channel"],
+        )
+        writer.writeheader()
+        writer.writerows(recommendation_rows)
 
-    print(f"Saved fusion recommendations: {rec_out}")  # 打印推荐结果保存路径
-    print(f"Saved evaluation metrics: {metric_out}")  # 打印指标文件保存路径
-    print(json.dumps(metrics, ensure_ascii=False, indent=2))  # 打印指标 JSON
-    return rec_out, metric_out, metrics  # 返回输出路径与指标
+    def mean(values: list[float]) -> float:
+        return float(sum(values) / len(values)) if values else 0.0
+
+    metrics: dict[str, Any] = {
+        f"MAP@{final_top_k}": mean(metric_values["map"]),
+        f"Recall@{final_top_k}": mean(metric_values["recall"]),
+        f"NDCG@{final_top_k}": mean(metric_values["ndcg"]),
+        f"Hit@{final_top_k}": mean(metric_values["hit"]),
+        "users_evaluated": len(context.targets),
+        "adaptive_weights": adaptive_weights,
+        "exclude_seen": exclude_seen,
+        "sequence_channel": context.sequence_channel,
+        "activity_weights": {tier: dict(values) for tier, values in weights_table.items()} if adaptive_weights else None,
+        "popular_recall_top_k": popular_recall_top_k,
+        "category_popular_recall_top_k": category_popular_recall_top_k,
+        "recall_top_k": recall_top_k,
+        "item2item_recall_top_k": item2item_recall_top_k,
+        "item2item_cooccur_weeks": item2item_cooccur_weeks,
+        "item2item_top_sim_k": item2item_top_sim_k,
+        "item2item_seed_items": item2item_seed_items,
+        "category_popular_seed_items": category_popular_seed_items,
+        "weights": fixed_weights if not adaptive_weights else "per-user by activity tier",
+        "activity_tier_counts": dict(tier_counts) if adaptive_weights else {},
+        "eval_split": eval_split,
+        "target_protocol": "deduplicated items from hm.<split>.inter",
+    }
+    metric_out.write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Saved fusion recommendations: {rec_out}")
+    print(f"Saved evaluation metrics: {metric_out}")
+    print(json.dumps(metrics, ensure_ascii=False, indent=2))
+    return rec_out, metric_out, metrics
 
 
-def main(argv: list[str] | None = None) -> None:  # 命令行入口函数
-    parser = argparse.ArgumentParser(prog="fashionrec evaluate", description="Multi-channel fusion offline evaluation")  # 创建参数解析器
-    parser.add_argument("--eval-split", choices=["valid", "test"], default="valid")  # 评估划分参数
-    parser.add_argument("--recall-top-k", type=int, default=100)  # 序列模型召回 Top-K
-    parser.add_argument(  # 热门召回 Top-K 参数
-        "--popular-recall-top-k",  # 参数名
-        type=int,  # 整数类型
-        default=POPULAR_RECALL_TOP_K,  # 默认值
-        help="Global popular recall top-k (default: 50)",  # 帮助文本
-    )  # 热门召回参数结束
-    parser.add_argument(  # 类别热门召回 Top-K 参数
-        "--category-popular-recall-top-k",  # 参数名
-        type=int,  # 整数类型
-        default=CATEGORY_POPULAR_RECALL_TOP_K,  # 默认值
-        help="Category popular recall top-k (default: 50)",  # 帮助文本
-    )  # 类别热门召回参数结束
-    parser.add_argument("--final-top-k", type=int, default=12)  # 融合最终 Top-K 参数
-    parser.add_argument("--popular-weight", type=float, default=0.15)  # 固定权重：热门通道
-    parser.add_argument("--category-popular-weight", type=float, default=0.15)  # 固定权重：类别热门
-    parser.add_argument("--item2item-weight", type=float, default=0.25)  # 固定权重：item2item 通道
-    parser.add_argument("--sasrec-weight", type=float, default=0.45)  # 固定权重：序列模型通道
-    parser.add_argument(  # item2item 召回 Top-K 参数
-        "--item2item-recall-top-k",  # 参数名
-        type=int,  # 整数类型
-        default=ITEM2ITEM_RECALL_TOP_K,  # 默认值
-        help="Item2item recall top-k (default: 50)",  # 帮助文本
-    )  # item2item 召回参数结束
-    parser.add_argument("--item2item-cooccur-weeks", type=int, default=COOCCUR_WEEKS)  # item2item 共现窗口参数
-    parser.add_argument("--item2item-top-sim-k", type=int, default=TOP_SIM_K)  # item2item 相似邻居数参数
-    parser.add_argument("--item2item-seed-items", type=int, default=SEED_ITEMS)  # item2item 种子商品数参数
-    parser.add_argument("--category-popular-seed-items", type=int, default=CATEGORY_SEED_ITEMS)  # 类别热门种子商品数参数
-    parser.add_argument("--sasrec-recall-csv", type=Path, default=None)  # 可选序列模型召回 CSV
-    parser.add_argument("--candidate-csv", type=Path, default=None)  # 已物化四路候选 CSV
-    parser.add_argument("--output-dir", type=Path, default=FUSION_OUT_DIR)  # 推荐输出目录
-    parser.add_argument("--evaluation-dir", type=Path, default=EVAL_OUT_DIR)  # 指标输出目录
-    parser.add_argument("--strict", action="store_true")  # 缺失依赖直接失败
-    parser.add_argument("--max-user-history", type=int, default=100)  # 历史长度上限
-    parser.add_argument("--data-dir", type=Path, default=None, help="Processed dataset root; defaults to data/processed.")
-    parser.add_argument("--labels-dir", type=Path, default=None, help="Optional next-basket labels parquet root")
-    parser.add_argument(  # 序列通道名参数
-        "--sequence-channel",  # 参数名
-        type=str,  # 字符串类型
-        default=None,  # 默认从 CSV 文件名推断
-        help="Sequence model channel key (sasrec/sasrecf); default inferred from recall csv filename",  # 帮助文本
-    )  # 序列通道参数结束
-    parser.add_argument(  # 禁用自适应权重开关
-        "--no-adaptive-weights",  # 参数名
-        action="store_true",  # 布尔开关
-        help="Use fixed weights for all users instead of activity-based adaptive weights",  # 帮助文本
-    )  # 自适应权重开关结束
-    parser.add_argument(  # 排除已购商品开关
-        "--exclude-seen",  # 参数名
-        action="store_true",  # 布尔开关
-        help="Exclude items already in user history from fusion candidates",  # 帮助文本
-    )  # 排除已购开关结束
-    parser.add_argument(  # 从 JSON 加载分层权重参数
-        "--weights-json",  # 参数名
-        type=Path,  # 路径类型
-        default=None,  # 默认不加载
-        help="Load per-tier fusion weights from JSON (e.g. outputs/evaluation/best_fusion_weights.json)",  # 帮助文本
-    )  # 权重 JSON 参数结束
-    parser.add_argument(  # LambdaRank 打分结果；缺文件时对照变体 skip
-        "--ranker-scored-csv",
-        type=Path,
-        default=None,
-        help="Optional LambdaRank scored csv from ranker-predict; missing file skips the variant",
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="fashionrec baseline evaluate",
+        description="Evaluate the fixed four-channel Weighted RRF baseline.",
     )
-    parser.add_argument(  # 关闭对照报告
-        "--no-ranker-comparison",
-        action="store_true",
-        help="Skip RRF vs LambdaRank comparison report",
-    )
-    args = parser.parse_args(argv)  # 解析显式命令参数
+    parser.add_argument("--eval-split", choices=["valid", "test"], default="valid")
+    parser.add_argument("--recall-top-k", type=int, default=100)
+    parser.add_argument("--popular-recall-top-k", type=int, default=POPULAR_RECALL_TOP_K)
+    parser.add_argument("--category-popular-recall-top-k", type=int, default=CATEGORY_POPULAR_RECALL_TOP_K)
+    parser.add_argument("--final-top-k", type=int, default=12)
+    parser.add_argument("--popular-weight", type=float, default=0.15)
+    parser.add_argument("--category-popular-weight", type=float, default=0.15)
+    parser.add_argument("--item2item-weight", type=float, default=0.25)
+    parser.add_argument("--sasrec-weight", type=float, default=0.45)
+    parser.add_argument("--item2item-recall-top-k", type=int, default=ITEM2ITEM_RECALL_TOP_K)
+    parser.add_argument("--item2item-cooccur-weeks", type=int, default=COOCCUR_WEEKS)
+    parser.add_argument("--item2item-top-sim-k", type=int, default=TOP_SIM_K)
+    parser.add_argument("--item2item-seed-items", type=int, default=SEED_ITEMS)
+    parser.add_argument("--category-popular-seed-items", type=int, default=CATEGORY_SEED_ITEMS)
+    parser.add_argument("--sasrec-recall-csv", type=Path, default=None)
+    parser.add_argument("--candidate-csv", type=Path, default=None)
+    parser.add_argument("--output-dir", type=Path, default=FUSION_OUT_DIR)
+    parser.add_argument("--evaluation-dir", type=Path, default=EVAL_OUT_DIR)
+    parser.add_argument("--strict", action="store_true")
+    parser.add_argument("--max-user-history", type=int, default=100)
+    parser.add_argument("--data-dir", type=Path, default=None)
+    parser.add_argument("--sequence-channel", type=str, default=None)
+    parser.add_argument("--no-adaptive-weights", action="store_true")
+    parser.add_argument("--exclude-seen", action="store_true")
+    parser.add_argument("--weights-json", type=Path, default=None)
+    args = parser.parse_args(argv)
 
-    loaded_weights = None  # 初始化加载的分层权重
-    exclude_seen = args.exclude_seen  # 默认使用命令行排除已购标志
-    if args.weights_json is not None:  # 若指定了权重 JSON 文件
-        from fashionrec.baseline.evaluation.weight_search import load_best_weights  # 导入权重加载函数
+    loaded_weights = None
+    exclude_seen = args.exclude_seen
+    if args.weights_json is not None:
+        from fashionrec.baseline.evaluation.weight_search import load_best_weights
 
-        payload = load_best_weights(args.weights_json)  # 加载最优权重载荷
-        loaded_weights = payload["best_weights"]  # 提取分层权重
-        if "exclude_seen" in payload and not args.exclude_seen:  # 若 JSON 含 exclude_seen 且命令行未指定
-            exclude_seen = bool(payload["exclude_seen"])  # 采用 JSON 中的 exclude_seen 设置
+        payload = load_best_weights(args.weights_json)
+        loaded_weights = payload["best_weights"]
+        if "exclude_seen" in payload and not args.exclude_seen:
+            exclude_seen = bool(payload["exclude_seen"])
 
-    evaluate_fusion(  # 调用融合评估主流程
-        eval_split=args.eval_split,  # 传入评估划分
-        recall_top_k=args.recall_top_k,  # 传入其他通道召回 Top-K
-        popular_recall_top_k=args.popular_recall_top_k,  # 传入热门召回 Top-K
-        category_popular_recall_top_k=args.category_popular_recall_top_k,  # 传入类别热门 Top-K
-        final_top_k=args.final_top_k,  # 传入最终 Top-K
-        popular_weight=args.popular_weight,  # 传入热门权重
-        category_popular_weight=args.category_popular_weight,  # 传入类别热门权重
-        item2item_weight=args.item2item_weight,  # 传入 item2item 权重
-        sasrec_weight=args.sasrec_weight,  # 传入序列模型权重
-        item2item_recall_top_k=args.item2item_recall_top_k,  # 传入 item2item 召回 Top-K
-        item2item_cooccur_weeks=args.item2item_cooccur_weeks,  # 传入 item2item 共现窗口
-        item2item_top_sim_k=args.item2item_top_sim_k,  # 传入 item2item 相似邻居数
-        item2item_seed_items=args.item2item_seed_items,  # 传入 item2item 种子商品数
-        category_popular_seed_items=args.category_popular_seed_items,  # 传入类别热门种子商品数
-        sasrec_recall_csv=args.sasrec_recall_csv,  # 传入序列模型召回 CSV
-        adaptive_weights=not args.no_adaptive_weights,  # 默认启用自适应权重
-        activity_weights=loaded_weights,  # 可选：搜索得到的分层权重
-        exclude_seen=exclude_seen,  # 是否排除已购
-        sequence_channel=args.sequence_channel,  # 传入序列通道名
-        candidate_csv=args.candidate_csv,  # 已物化候选
-        output_dir=args.output_dir,  # 推荐输出目录
-        evaluation_dir=args.evaluation_dir,  # 指标输出目录
-        strict=args.strict,  # 严格依赖检查
-        max_user_history=args.max_user_history,  # 统一历史上限
+    evaluate_fusion(
+        eval_split=args.eval_split,
+        recall_top_k=args.recall_top_k,
+        popular_recall_top_k=args.popular_recall_top_k,
+        category_popular_recall_top_k=args.category_popular_recall_top_k,
+        final_top_k=args.final_top_k,
+        popular_weight=args.popular_weight,
+        category_popular_weight=args.category_popular_weight,
+        item2item_weight=args.item2item_weight,
+        sasrec_weight=args.sasrec_weight,
+        item2item_recall_top_k=args.item2item_recall_top_k,
+        item2item_cooccur_weeks=args.item2item_cooccur_weeks,
+        item2item_top_sim_k=args.item2item_top_sim_k,
+        item2item_seed_items=args.item2item_seed_items,
+        category_popular_seed_items=args.category_popular_seed_items,
+        sasrec_recall_csv=args.sasrec_recall_csv,
+        adaptive_weights=not args.no_adaptive_weights,
+        activity_weights=loaded_weights,
+        exclude_seen=exclude_seen,
+        sequence_channel=args.sequence_channel,
+        candidate_csv=args.candidate_csv,
+        output_dir=args.output_dir,
+        evaluation_dir=args.evaluation_dir,
+        strict=args.strict,
+        max_user_history=args.max_user_history,
         data_dir=args.data_dir,
-        ranker_scored_csv=args.ranker_scored_csv,
-        compare_rankers=not args.no_ranker_comparison,
-        labels_dir=args.labels_dir,
-    )  # 结束评估调用
+    )
 
 
-if __name__ == "__main__":  # 脚本直接运行时
-    main()  # 执行主函数
+if __name__ == "__main__":
+    main()

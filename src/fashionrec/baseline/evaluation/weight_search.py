@@ -220,7 +220,6 @@ def run_weight_search(  # 运行完整权重搜索流程并保存结果
     max_user_history: int = 100,  # 用户分层与排除已购使用的历史上限
     exclude_seen_mode: Literal["both", "false", "true"] = "both",  # 要搜索的模式
     data_dir: str | Path | None = None,  # processed dataset root
-    labels_dir: str | Path | None = None,  # 新协议 next-basket 标签
 ) -> dict[str, Any]:  # 返回搜索结果载荷
     if eval_split != "valid":  # 权重搜索仅允许验证集
         raise ValueError("Weight search is only allowed on eval_split='valid'")  # 抛出非法划分异常
@@ -242,7 +241,6 @@ def run_weight_search(  # 运行完整权重搜索流程并保存结果
         final_top_k=final_top_k,  # 排序长度
         max_user_history=max_user_history,  # 统一历史口径
         data_dir=data_dir,
-        labels_dir=labels_dir,
     )  # 上下文构建完成
 
     mode_results: dict[str, dict[str, Any]] = {}  # 初始化各模式搜索结果
@@ -312,7 +310,6 @@ def main(argv: list[str] | None = None) -> None:  # 命令行入口函数
     parser.add_argument("--final-top-k", type=int, default=12)  # 最终排序长度
     parser.add_argument("--max-user-history", type=int, default=100)  # 历史长度上限
     parser.add_argument("--data-dir", type=Path, default=None, help="Processed dataset root; defaults to data/processed.")
-    parser.add_argument("--labels-dir", type=Path, default=None, help="Optional next-basket labels parquet root")
     parser.add_argument(  # exclude_seen 搜索模式参数
         "--exclude-seen-only",  # 参数名
         choices=["both", "false", "true"],  # 可选值
@@ -333,7 +330,6 @@ def main(argv: list[str] | None = None) -> None:  # 命令行入口函数
         max_user_history=args.max_user_history,  # 统一历史上限
         exclude_seen_mode=args.exclude_seen_only,  # 单模式或双模式
         data_dir=args.data_dir,
-        labels_dir=args.labels_dir,
     )  # 权重搜索流程结束
 
 

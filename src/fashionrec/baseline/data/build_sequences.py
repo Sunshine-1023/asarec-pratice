@@ -8,7 +8,6 @@ from pathlib import Path  # 路径
 
 import pandas as pd  # 读取和排序交互
 
-from fashionrec.baseline.data.build_baskets import flatten_recent_baskets  # 按完整购物日截断历史
 from fashionrec.shared.domain.ids import canonical_item_id, canonical_user_id  # 统一 ID 契约
 
 
@@ -24,6 +23,28 @@ RECB_TEST_FILE = TARGET_DIR / "hm_seq.test.inter"  # RecBole 测试文件
 
 
 BasketHistory = dict[str, list[list[str]]]  # 用户 -> 从旧到新的购物日商品集合
+
+
+def flatten_recent_baskets(
+    baskets: list[list[str]],
+    *,
+    max_item_list_length: int,
+    max_shopping_days: int | None = None,
+) -> list[str]:
+    """Flatten complete shopping days without inventing within-day causality."""
+
+    if max_item_list_length < 1:
+        raise ValueError("max_item_list_length must be >= 1")
+    selected = list(baskets)
+    if max_shopping_days is not None:
+        if max_shopping_days < 1:
+            raise ValueError("max_shopping_days must be >= 1")
+        selected = selected[-max_shopping_days:]
+    while selected and sum(len(day) for day in selected) > max_item_list_length:
+        if len(selected) == 1:
+            return list(selected[0][:max_item_list_length])
+        selected = selected[1:]
+    return [item_id for day_items in selected for item_id in day_items]
 
 
 def _add_date_column(frame: pd.DataFrame) -> pd.DataFrame:  # 时间戳落到日历日，同日不同秒仍同一篮

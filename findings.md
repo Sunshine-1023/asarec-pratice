@@ -88,3 +88,60 @@
 
 - 本轮只读审计，不修改算法实现；“完整”拆成 DAG 可执行闭环、数据/标签语义一致、防泄漏、指标公平和真实全量运行验证五个层次。
 - 上一轮已证明 251 项单测、CLI smoke、10/14 步 DAG 规划和产物命名空间通过，但尚未证明 3100 万行 H&M 数据上的整链训练成功或指标提升。
+- DAG 产物路径目前闭环：两链均为 data → SASRecF train → valid checkpoint → valid/test recall → candidates → valid 权重 → valid/test evaluate；Industrial 额外在 candidates 后构建 ranking parquet、训练/预测 LambdaRank。
+- Industrial 的 weight search 与最终 evaluate 都显式读取同一 run 的 `data/labels`；Baseline 明确不读取 next-basket labels。
+- 配置里 Baseline 与 Industrial 都使用 26 周历史 + 1 周 valid + 1 周 test；两者主要差异在 ranking 开关与应用协议，不是时间窗口。
+- 两链的 SASRecF 配置当前完全相同；Industrial 的序列通道仍是 Baseline SASRecF 的独立副本，不是不同的序列模型。
+- SASRecF checkpoint 只用 valid 粗筛/精筛，不读取 test；但 valid 同时承担 RecBole 早停、checkpoint 精筛和 RRF 权重搜索，因此 valid 指标是调参内指标，最终泛化判断只能看 test。
+- Baseline 的序列数据已固定按购物日去重和共享历史，`deduplicate_user_day_item` 配置目前只是记录到 manifest，并不是可切换开关；因此 Baseline 不再复刻旧交易行伪序列。
+- `model_train` 只用 train 统计购买次数 ≥5 的用户训练模型，完整 train 仍用于 valid 历史；这避免了用 valid/test 活跃度筛训练用户。
+
+## 2026-08-20 双链路完整性复审结论
+
+- 结论分层：两套单窗口 DAG 和产物依赖闭环完整，应用/profile/运行目录隔离成立；Baseline 逻辑可作为稳定对照；Industrial 的 PIT 截断和 next-basket 标签方向正确，但当前不能认定为全量可运行、语义完全一致的工业链。
+- P1：LambdaRank 的 train 候选只来自六路规则召回，valid/test 候选额外包含 SASRecF。训练表仍声明 `sasrecf_present/score/rank`，因此这三列在 train 恒为 0、在 valid/test 才有非零值；LightGBM 会把它们纳入 schema，却无法从训练中学到序列通道价值，存在明确 train-serving feature shift。
+- P1：SASRecF 序列已使用 user-day-item 去重购物篮语义，但正式规则候选、RRF 活跃度分层和已购过滤仍通过 `.inter` 最近 N 个交易行构造 history；同日多 SKU 和数量重复会改变历史长度、种子商品以及 activity tier。Industrial 的购物篮协议尚未贯穿全召回/排序链。
+- P1：`build_cross_feature_table` 的 cohort history 只包含当前候选批次中出现的用户，而不是该 age bucket 的全部历史用户；所谓 cohort popularity 会依赖评估用户集合，并且快照用户本身是由未来标签周活跃性筛出的，口径不等同线上人群热度。
+- P1（可运行性）：全量 raw 约 4.1GB，transactions CSV 约 3.2GB；ranking table 物化一次性读取 events/user features/item/customer features，拼接每用户最多 500 候选，并逐候选 Python 循环计算交叉特征。微型测试闭环成立，但当前复杂度和内存模式对 3100 万行全量数据风险很高，仓库内没有真实 full-run 产物证明其完成过。
+- P2：PIT user features 会为全部 weekly train snapshots × 全部有历史用户生成行，而 LambdaRank 默认只消费最近 4 个 train snapshots，存在显著冗余计算和落盘。
+- P2：LambdaRank 只选择 numeric dtype；item/customer 的 token 类别特征被静默排除，numeric ID（例如 product_code）反而可能作为连续数值输入，特征表达不理想。
+- P2：训练只丢弃候选数少于 2 的 group，不丢弃零正例 group，也没有常量列/分布漂移 gate；候选覆盖不足时会产生大量无排序梯度的训练组。
+- P2：RRF 搜索只优化 sequence/popular/category/item2item，repurchase/style/content 使用固定辅助权重；这是可用首版，但限制了扩展召回的效果上限。
+- P2：union 500 先按多通道覆盖数、再按最佳 rank 选 item，可能挤掉强单通道独占候选；应依靠 candidate diagnostics/A-B 验证，不应直接假定该规则最优。
+- P2：`--build-backtest` 只写多窗口切分/标签，不自动执行多窗口训练、选模和汇总；当前正式结论仍来自单窗口。
+- P2：snapshot/evaluation 只覆盖未来标签周有购买的用户，适合 H&M next-week purchaser 离线协议，不等同线上全量用户曝光/点击场景。
+- P2：同一 run-id 可以在配置一致时重跑，但 runner 不按 manifest 跳过已完成步骤，也不做 stage 原子提交；它是产物命名空间隔离，不是真正断点续跑。
+- 验证：45 项定向测试通过；完整 `make check` 再次通过 251 项测试及 Baseline/Industrial/兼容 CLI smoke checks。未运行 3.2GB raw 上的完整训练。
+
+## 2026-08-21 代码重复与冗余审计
+
+- Python 源码共约 21,894 行；Baseline 9,468 行，Industrial 10,766 行，shared 只有 549 行。
+- Baseline/Industrial 有 55 个同路径文件在仅替换应用命名空间后相似度 ≥95%，合计覆盖 Baseline 约 9,123 行（约 96%）。这说明当前“算法应用隔离”主要通过复制实现达成，而不是两套已经独立演进的算法。
+- 其中 12 组、1,560 行是字节级完全相同文件，包括 item_features、manifest、candidate union、coverage/report、checkpoint 工具、paths/time 和接口 facade。
+- 有意保留的重复：两套 pipeline/stages、CLI wrapper、profile 配置、SASRecF 配置路径和各自应用入口。这些文件承担协议所有权和未来独立演进，不应只因相似就直接合并。
+- 高价值运行冗余：Baseline data 默认构建 `customer_features/customers.parquet` 和完整 `item_features/items.parquet`，但 Baseline SASRecF/RRF 正式 DAG 不消费这两份 ranking parquet；只需要 `hm_seq.item`。这会额外扫描 customers/articles 并占用磁盘。
+- 高价值代码冗余：Baseline data service 仍包含 events/baskets/labels/PIT user/cross feature 全套参数和实现，外层 Baseline command 又明确拒绝这些参数。六个 Industrial-only data 模块约 1,289 行在正式 Baseline 协议中没有必要。
+- 高价值代码冗余：Baseline 只允许 popular/category/item2item，但仍复制 repurchase/style/content 三路实现、注册表分支、Top-K 参数和辅助 RRF 权重；单独三个算法文件约 389 行，正式 Baseline CLI 不会启用。
+- Baseline `offline_eval.py` 仍保留 LambdaRank 对照、ranker scored CSV 和 replacement gate 逻辑，而 Baseline evaluation wrapper 明确禁止 `--ranker-scored-csv`。这部分属于可裁剪的协议外代码。
+- Baseline `evaluation/baseline_command.py`、`data/profile.py` 没有被 Baseline 应用命令面引用；Industrial 的 `evaluation/baseline_command.py` 只服务旧统一 CLI。
+- 旧顶层 data/domain/evaluation/pipeline/ranking/recall/training/candidates 共 27 个兼容文件、424 行。它们目前由统一 CLI、旧测试和文档引用，不能立即删除，但应视为迁移债务而不是第三套正式实现。
+- 兼容层存在“物理文件被 alias 遮蔽”的冗余：`fashionrec.data.command` 实际加载 Industrial service，`fashionrec.recall.registry` 实际加载 Industrial channel_registry，`fashionrec.training.command/checkpoint_command` 实际加载 Baseline service；对应 facade 文件本身不会执行，容易误导维护者。
+- Industrial 的 `data/events.py`、`baskets.py`、`features.py` 只是 public re-export facade；目标目录测试要求其存在。更干净的做法是把 `build_events.py/build_baskets.py` 实现重命名到目标模块，而不是同时保留实现文件和别名文件。
+- 三份 SASRecF YAML（baseline、industrial、legacy root）参数完全相同，仅首行注释不同。Baseline/Industrial 两份是有意独立所有权；root `configs/sasrecf.yaml` 仅为旧统一 CLI 兼容。
+- `configs/sasrec.yaml` 是不同的 SASRec/BPR 手工实验配置，并非重复 SASRecF 配置；README 仍引用它，不能按重复文件删除。
+- 应用内部另有小型重复：content/style 各自复制同一 `_load_interactions`；多个 CLI wrapper 只有 4～10 行。这些影响小，不应先于运行冗余处理。
+- 推荐整理边界：若坚持“两套算法完全物理隔离”，不要把核心算法重新共享；先精简 Baseline 到真正四路/RRF 所需模块。若接受“应用隔离、稳定算法共享”，再把 exact-identical 的 paths/time/checkpoint/union/report 等下沉 shared，但这会改变此前的隔离原则。
+- 验证：源码哈希、规范化 AST/diff、import reachability 和运行时模块身份检查完成；19 项隔离/公开入口测试通过，compileall 与 git diff check 通过。本轮未修改算法代码。
+
+## 2026-08-21 冗余清理结果
+
+- Baseline 数据准备现在只生成 `hm.inter`、时间切分、`hm.model_train.inter`、购物日因果序列、`hm_seq.item`、可选 backtest splits 与 manifest；不再扫描/写出 customer/item ranking parquet，也不再包含 events/baskets parquet/labels/PIT user/cross feature 分支。
+- Baseline 删除了 Industrial-only 数据实现：events、basket parquet、labels、snapshots、user/cross/customer ranking features 和 raw profile；购物日序列所需的完整日截断函数已归入 `build_sequences.py`。
+- Baseline 商品表改成紧凑实现，只读取 SASRecF 所需 8 个类别列，并仅保留序列 split 中出现的 SKU；不再先构造完整 24 字段 ranking feature table。
+- Baseline 召回注册表和 CLI service 现在只支持 Popular、Category Popular、Item2Item；Repurchase、Style、Content 文件和辅助 RRF 权重已删除。
+- Baseline offline evaluation 只保留行级购买集合 + Weighted RRF；next-basket label loader、LambdaRank CSV、replacement gate、comparison report 以及未接入 DAG 的候选诊断副本已删除。权重搜索也不再接受 labels_dir。
+- Industrial 的 `events.py` 和 `baskets.py` 已直接承载真实实现，`build_events.py` / `build_baskets.py` 镜像文件删除；旧 `fashionrec.data.build_*` import 通过 alias 继续指向新 canonical 模块。
+- 删除 10 个不会执行或没有引用的兼容 shadow / 旧 pipeline 子目录文件；统一 CLI 依赖的 package-level alias 和 profile registry 保留。
+- 清理后 Baseline 从约 9,468 行降至 5,488 行，减少 3,980 行（约 42.0%）。规范化相似度 ≥95% 的同路径文件从 55 组降至 31 组，覆盖行数从约 9,123 降至 3,656；字节级完全相同从 12 组/1,560 行降至 8 组/697 行。
+- 仍保留的重复主要是两应用独立拥有的 SASRecF、基础召回、RRF 与稳定基础工具；是否进一步下沉 shared 属于新的架构选择，不应在“算法物理隔离”约束下自动执行。
+- 验证：完整 `make check` 通过，254 项测试全部收集并执行成功，Baseline/Industrial/旧统一 CLI smoke checks 通过；`git diff --check`、双 profile Make dry-run 和 import 边界检查通过。未运行 3.2GB raw 的真实全链训练。

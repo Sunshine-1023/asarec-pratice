@@ -40,10 +40,7 @@ from fashionrec.baseline.recall.item2item import (
     SEED_ITEMS as ITEM2ITEM_SEED_ITEMS,
     TOP_SIM_K,
 )
-from fashionrec.baseline.recall.content import CONTENT_RECALL_TOP_K
 from fashionrec.baseline.recall.popular import POPULAR_RECALL_TOP_K
-from fashionrec.baseline.recall.repurchase import REPURCHASE_RECALL_TOP_K
-from fashionrec.baseline.recall.style import STYLE_RECALL_TOP_K
 from fashionrec.baseline.recall.channel_registry import PrecomputedChannel, build_rule_channel_registry, select_channels
 
 
@@ -56,17 +53,11 @@ ChannelName = Literal[
     "popular",
     "category_popular",
     "item2item",
-    "repurchase",
-    "style",
-    "content",
 ]
 ALL_CHANNELS: tuple[ChannelName, ...] = (
     "popular",
     "category_popular",
     "item2item",
-    "repurchase",
-    "style",
-    "content",
 )
 
 
@@ -131,9 +122,6 @@ def export_rule_recalls(
         "popular": POPULAR_RECALL_TOP_K,
         "category_popular": CATEGORY_POPULAR_RECALL_TOP_K,
         "item2item": ITEM2ITEM_RECALL_TOP_K,
-        "repurchase": REPURCHASE_RECALL_TOP_K,
-        "style": STYLE_RECALL_TOP_K,
-        "content": CONTENT_RECALL_TOP_K,
     }
     top_k_by_channel = {
         channel: int(top_k if top_k is not None else (channel_top_k or {}).get(channel, defaults[channel]))
@@ -204,9 +192,6 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--sequence-recall-csv", type=Path, default=None)
     parser.add_argument("--sequence-top-k", type=int, default=100)
     parser.add_argument("--union-top-k", type=int, default=DEFAULT_UNION_TOP_K)
-    parser.add_argument("--repurchase-top-k", type=int, default=REPURCHASE_RECALL_TOP_K)
-    parser.add_argument("--style-top-k", type=int, default=STYLE_RECALL_TOP_K)
-    parser.add_argument("--content-top-k", type=int, default=CONTENT_RECALL_TOP_K)
     parser.add_argument("--item-file", type=Path, default=None, help="Item features; defaults to --data-dir/hm_seq/hm_seq.item.")
     parser.add_argument("--articles-path", type=Path, default=None)
     parser.add_argument("--customers-path", type=Path, default=None)
@@ -238,9 +223,6 @@ def main(argv: list[str] | None = None) -> None:
                 "popular": args.popular_top_k,
                 "category_popular": args.category_popular_top_k,
                 "item2item": args.item2item_top_k,
-                "repurchase": args.repurchase_top_k,
-                "style": args.style_top_k,
-                "content": args.content_top_k,
             },
             max_user_history=args.max_user_history,
             item_file=args.item_file,

@@ -6,8 +6,8 @@ import sys
 
 _ALIASES = {
     "backtest": "fashionrec.industrial.data.backtest",
-    "build_baskets": "fashionrec.industrial.data.build_baskets",
-    "build_events": "fashionrec.industrial.data.build_events",
+    "build_baskets": "fashionrec.industrial.data.baskets",
+    "build_events": "fashionrec.industrial.data.events",
     "build_item_features": "fashionrec.industrial.data.build_item_features",
     "build_sequences": "fashionrec.industrial.data.build_sequences",
     "command": "fashionrec.industrial.data.service",
