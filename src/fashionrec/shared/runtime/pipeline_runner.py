@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from fashionrec.experiment.context import RunContext, create_run_context
+from fashionrec.shared.experiment.context import RunContext, create_run_context
 from fashionrec.shared.runtime.contracts import PipelineOptions, PipelineStep
 
 

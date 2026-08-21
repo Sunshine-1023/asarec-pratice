@@ -12,7 +12,7 @@ from typing import Protocol, Sequence
 import numpy as np
 import pandas as pd
 
-from fashionrec.experiment.config import load_experiment_config
+from fashionrec.shared.experiment.config import load_experiment_config
 from fashionrec.industrial.data.basket_history import history_from_events
 from fashionrec.shared.domain.candidates import Candidate
 from fashionrec.shared.domain.ids import canonical_item_id, canonical_user_id
@@ -110,7 +110,7 @@ class ReusedSASRecFScorer:
         if not path.is_file():
             raise FileNotFoundError(f"SASRecF checkpoint not found: {path}")
 
-        from fashionrec.pytorch_compat import patch_recbole_compat
+        from fashionrec.shared.runtime.pytorch_compat import patch_recbole_compat
 
         patch_recbole_compat()
         import torch

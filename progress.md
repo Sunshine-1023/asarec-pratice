@@ -88,3 +88,15 @@
 - 2026-08-21：Industrial DAG 仍为 15 步，但只有第 2 步训练 SASRecF；第 8 步只做单 checkpoint 推理。已删除额外 checkpoint 路径及 `sequence_snapshot_epochs/sequence_validation_days` 配置。
 - 2026-08-21：序列复用报告和 ranking dataset report 显式记录 `mode=single_checkpoint_simple_reuse`、`causal_model=false`、`history_as_of=true` 和唯一 checkpoint 路径。
 - 2026-08-21：50 项定向回归通过；完整 `make check`、全部 CLI smoke、DAG 单训练检查和 `git diff --check` 通过。Baseline 源码/配置未修改，未启动真实 SASRecF/LightGBM 训练。
+- 2026-08-21：开始双应用结构收口；冻结范围为 shared 基础设施迁移、正式测试路径、legacy 标识与文档，不改变训练算法和数据协议，并保留用户已有 `requirements.txt` 修改。
+- 2026-08-21：`experiment/{config,context,artifacts}` 与 RecBole/PyTorch 兼容实现已迁入 `shared`；两应用改用正式 shared import，旧路径保留 facade；47 项定向回归通过。
+- 2026-08-21：测试已物理分为 `shared/baseline/industrial/compatibility/integration/pipelines`，正式测试 import 不再经过旧算法 facade；首次合并回归触发已知 LightGBM/Torch 原生冲突，转为分批验证。
+- 2026-08-21：分类后的非 LightGBM 测试与 LightGBM 测试分批全部通过；正式测试已直接覆盖 `shared/baseline/industrial`，旧公开面单独归入 `compatibility`。
+- 2026-08-21：更新 ARCHITECTURE/README，重写当前 PROJECT_GUIDE 为双应用版本；修正“快照各训一个 SASRecF”旧描述，根 YAML 已标明 legacy/experimental，Industrial `baseline_command.py` 更名为 `rrf_control_command.py`。
+- 2026-08-21：标准 `make check` 首次暴露 Torch/LightGBM 原生导入顺序崩溃；将两应用 SASRecF training/recall 改为惰性导入 Torch 后，第二次 `make check` 通过 265 项测试及全部 CLI smoke。
+- 2026-08-21：依赖边界、legacy 模块身份、Python 语法、双 Make DAG dry-run 和 `git diff --check` 通过；清理源码/测试中的 `__pycache__` 与 `.pytest_cache`。未启动真实全量训练。
+- 2026-08-21：用户授权彻底删除兼容层；新增阶段 59–62，目标为只保留 shared/baseline/industrial 真实实现与明确应用路由，不改算法协议。
+- 2026-08-21：物理删除 `candidates/data/domain/evaluation/experiment/pipeline/ranking/recall/training` 和顶层 `pytorch_compat.py`；源码顶层只剩 `baseline/industrial/shared` 与 `cli.py/__init__.py/__main__.py`。
+- 2026-08-21：删除根级 `configs/experiment.yaml`、`configs/sasrec.yaml`、`configs/sasrecf.yaml`；两应用默认配置全部指向各自目录。
+- 2026-08-21：顶层 CLI 收缩为 `baseline`、`industrial`、`profile-data`，旧 `fashionrec train/data/evaluate/pipeline --profile` 不再支持；测试和文档已迁移到正式入口。
+- 2026-08-21：定向隔离/编排/公开面回归 31 项通过；最终 `make check` 通过 262 项测试和全部 CLI smoke。10 个旧模块均确认不可导入，源码无旧命名空间 import，双 Make DAG dry-run 与 `git diff --check` 通过。未运行 3.2GB 原始数据上的真实全量训练。

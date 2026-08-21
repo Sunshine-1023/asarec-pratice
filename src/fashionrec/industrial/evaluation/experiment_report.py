@@ -10,10 +10,10 @@ from typing import Any, Iterable, Mapping, Sequence  # 类型
 
 from fashionrec.shared.domain.ids import canonical_item_id, canonical_user_id  # 对照评估统一 ID
 from fashionrec.shared.metrics.ranking import hit_at_k, map_at_k, mean_metric, ndcg_at_k, recall_at_k  # 统一指标
-from fashionrec.experiment.config import REQUIRED_TIERS, classify_activity_tier  # 活跃度分层
+from fashionrec.shared.experiment.config import REQUIRED_TIERS, classify_activity_tier  # 活跃度分层
 
 
-DEFAULT_ACTIVITY_TIERS: dict[str, tuple[int, int | None]] = {  # 与 configs/experiment.yaml 一致，供不加载 YAML 的 evaluate 使用
+DEFAULT_ACTIVITY_TIERS: dict[str, tuple[int, int | None]] = {  # 与 Industrial 正式配置一致
     "cold_start": (0, 0),
     "low": (1, 2),
     "medium": (3, 9),

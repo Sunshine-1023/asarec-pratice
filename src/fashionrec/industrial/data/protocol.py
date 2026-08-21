@@ -1,6 +1,6 @@
 """Validation for the industrial next-basket/LambdaRank protocol."""
 
-from fashionrec.experiment.context import RunContext
+from fashionrec.shared.experiment.context import RunContext
 
 
 def validate_context(context: RunContext) -> None:

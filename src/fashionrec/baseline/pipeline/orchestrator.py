@@ -12,7 +12,7 @@ from fashionrec.baseline.pipeline.stages import (
     train_step,
     weight_step,
 )
-from fashionrec.experiment.context import RunContext
+from fashionrec.shared.experiment.context import RunContext
 from fashionrec.shared.runtime.contracts import PipelineOptions, PipelineStep
 
 

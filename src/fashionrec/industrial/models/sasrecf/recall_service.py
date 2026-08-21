@@ -10,7 +10,6 @@ from typing import Iterable  # 导入可迭代类型
 
 import numpy as np  # 导入 NumPy 数值计算库
 import pandas as pd  # 导入 pandas 数据分析库
-import torch  # 导入 PyTorch 深度学习框架
 import yaml  # 导入 YAML 配置文件解析
 
 from fashionrec.industrial.data.paths import ProcessedDataPaths
@@ -20,7 +19,7 @@ if __package__ is None or __package__ == "":  # 若以脚本方式直接运行
     if str(project_root) not in sys.path:  # 若根目录不在搜索路径中
         sys.path.insert(0, str(project_root))  # 注入项目根目录到 sys.path
 
-DEFAULT_CONFIG = Path("configs/sasrec.yaml")  # 默认 SASRec 配置文件
+DEFAULT_CONFIG = Path("configs/industrial/models/sasrecf.yaml")
 DEFAULT_CKPT_DIR = Path("outputs/checkpoints/sasrec")  # 默认 SASRec 检查点目录
 DEFAULT_RECALL_TOP_K = 100  # 默认召回 Top-K
 DEFAULT_OUTPUT_DIR = Path("outputs/recommendations")  # 默认召回结果输出目录
@@ -144,9 +143,10 @@ def export_sasrec_recall(  # 导出 SASRec / SASRecF Top-K 召回结果到 CSV
         if not model_file.exists():  # 若检查点不存在
             raise FileNotFoundError(f"Checkpoint not found: {model_file}")  # 抛出异常
 
-    from fashionrec.pytorch_compat import patch_recbole_compat  # 仅真实召回时需要 RecBole
+    from fashionrec.shared.runtime.pytorch_compat import patch_recbole_compat  # 仅真实召回时需要 RecBole
 
     patch_recbole_compat()  # 在延迟导入 RecBole 前应用兼容补丁
+    import torch  # 仅真实推理时加载，避免与 LightGBM 测试的原生运行时冲突
     from recbole.quick_start import load_data_and_model  # 延迟导入可选召回依赖
 
     config, model, _, _, valid_data, test_data = load_data_and_model(model_file=str(model_file))  # 加载模型与数据

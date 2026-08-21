@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fashionrec.experiment.context import RunContext
+from fashionrec.shared.experiment.context import RunContext
 from fashionrec.industrial.data.protocol import validate_context
 from fashionrec.industrial.pipeline.stages import (
     append,

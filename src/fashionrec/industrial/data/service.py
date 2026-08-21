@@ -45,9 +45,9 @@ from fashionrec.industrial.data.split import (  # 时间划分与 train-only 模
     split_bounds_dict,
     split_by_time,
 )
-from fashionrec.experiment.config import load_experiment_config  # 可选统一实验协议
+from fashionrec.shared.experiment.config import load_experiment_config  # 可选统一实验协议
 
-DEFAULT_CONFIG = Path("configs/sasrecf.yaml")  # SASRecF 默认配置文件路径
+DEFAULT_CONFIG = Path("configs/industrial/models/sasrecf.yaml")
 DEFAULT_PROCESSED_DIR = Path("data/processed")  # 独立调用时的旧目录；流水线应传入 run-scoped 路径
 
 

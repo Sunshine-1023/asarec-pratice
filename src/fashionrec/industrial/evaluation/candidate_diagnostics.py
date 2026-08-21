@@ -17,7 +17,7 @@ from fashionrec.industrial.evaluation.coverage_metrics import (  # 覆盖指标
     user_coverage,
 )
 from fashionrec.shared.metrics.ranking import canonicalize_item_set, hit_at_k, mean_metric, recall_at_k  # 召回指标
-from fashionrec.experiment.config import REQUIRED_TIERS, classify_activity_tier  # 活跃度分层
+from fashionrec.shared.experiment.config import REQUIRED_TIERS, classify_activity_tier  # 活跃度分层
 
 
 DIAGNOSTICS_SCHEMA_VERSION = "hm.candidate_diagnostics.v1"  # 报告语义

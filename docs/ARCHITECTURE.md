@@ -33,13 +33,14 @@ src/fashionrec/
 │   ├── interfaces/         # RecallChannel / Ranker 稳定边界
 │   ├── io/                 # 中立 CSV / Parquet I/O
 │   ├── metrics/            # MAP/Recall/NDCG 等纯数学实现
+│   ├── experiment/         # 配置、RunContext、产物路径
 │   └── runtime/            # CLI dispatch、argv、pipeline runner/contracts
-├── data/ recall/ ranking/ training/ evaluation/ candidates/
-│                           # 旧 import 兼容 facade，不承载正式实现
-└── pipeline/               # 旧 --profile 兼容 facade，不是正式入口
+├── cli.py                  # baseline / industrial / profile-data 明确路由
+├── __init__.py
+└── __main__.py
 ```
 
-依赖方向固定为 `baseline|industrial application → shared kernel`。Baseline 与 Industrial 禁止互相导入，应用也禁止通过旧顶层 facade 间接调用另一套实现；shared 禁止反向导入任一应用。两套 DAG 的子进程分别调用 `python -m fashionrec.baseline <command>` 和 `python -m fashionrec.industrial <command>`。
+依赖方向固定为 `baseline|industrial application → shared kernel`。Baseline 与 Industrial 禁止互相导入，shared 禁止反向导入任一应用。旧顶层算法 facade 已删除；两套 DAG 的子进程分别调用 `python -m fashionrec.baseline <command>` 和 `python -m fashionrec.industrial <command>`。
 
 ## 核心数据契约
 
@@ -67,8 +68,8 @@ baseline profile
 industrial profile
   events / baskets / next-basket labels / PIT user features
   → 独立 SASRecF 训练与 valid/test 扩展多路候选
-  → 最近 N 个因果 train 快照各自训练截止 as-of 的 SASRecF
-  → 六路规则召回 + 当期 SASRecF 的 train 候选
+  → 唯一 SASRecF checkpoint 按各 train 快照的 as-of 用户历史生成序列证据
+  → 六路规则召回 + 复用 SASRecF 的 train 候选
   → 全候选 cross features + train/valid/test ranking parquet
   → LightGBM LambdaRank 训练与打分
   → next-basket RRF vs LambdaRank valid/test 对照
@@ -117,6 +118,8 @@ make industrial WITH_FILTER=1
 
 `Makefile` 根据 `PROFILE` 选择一个应用入口，但不再调用通用 `fashionrec pipeline --profile`。分阶段运行必须固定 `PROFILE` 和 `RUN_ID`，例如 `make train PROFILE=industrial RUN_ID=exp-001`。分阶段目标会跳过 ranker 执行，但不会把 Industrial 的数据/标签协议降级成 Baseline。
 
-正式应用入口是 `python -m fashionrec.baseline` 与 `python -m fashionrec.industrial`。顶层 `python -m fashionrec` 保留 profile-data 和旧命令兼容，不再承担两条正式训练链的选择职责。
+正式应用入口是 `python -m fashionrec.baseline` 与 `python -m fashionrec.industrial`。顶层 `python -m fashionrec` 只提供 `baseline`、`industrial` 和 `profile-data` 三个明确路由，不再接受旧的通用训练子命令或 `pipeline --profile`。
 
-两套应用分别拥有 `configs/baseline/{experiment.yaml,models/sasrecf.yaml}` 与 `configs/industrial/{experiment.yaml,models/sasrecf.yaml}`。`configs/experiment.yaml` 和根目录模型 YAML 仅作为旧调用兼容文件保留。
+两套应用分别拥有 `configs/baseline/{experiment.yaml,models/sasrecf.yaml}` 与 `configs/industrial/{experiment.yaml,models/sasrecf.yaml}`。根级 `configs/experiment.yaml`、`configs/sasrecf.yaml` 和 `configs/sasrec.yaml` 已删除。
+
+测试按 `tests/shared/`、`tests/baseline/`、`tests/industrial/`、`tests/pipelines/` 和 `tests/integration/` 分类。结构测试会明确断言旧顶层命名空间不存在。

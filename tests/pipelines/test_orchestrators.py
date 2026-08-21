@@ -4,9 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from fashionrec.baseline.pipeline.orchestrator import build_pipeline_steps as build_baseline_steps
 from fashionrec.baseline.recall.registry import BASELINE_RULE_CHANNELS
-from fashionrec.experiment.context import create_run_context
-from fashionrec.pipeline.orchestrator import PipelineOptions, build_pipeline_steps
+from fashionrec.industrial.pipeline.orchestrator import build_pipeline_steps as build_industrial_steps
+from fashionrec.shared.experiment.context import create_run_context
+from fashionrec.shared.runtime.contracts import PipelineOptions
+
+
+def build_pipeline_steps(context, *, python_executable: str, options: PipelineOptions):
+    builder = build_industrial_steps if context.artifacts.profile == "industrial" else build_baseline_steps
+    return builder(context, python_executable=python_executable, options=options)
 
 
 def test_pipeline_steps_share_one_run_artifact_tree(tmp_path: Path) -> None:

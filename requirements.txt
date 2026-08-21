@@ -1,11 +1,35 @@
-pandas
-numpy
-scikit-learn
-tqdm
-matplotlib
-torch
-recbole
-pyyaml
-pytest
-pyarrow
-lightgbm
+# FashionRec-Transformer
+# Python >= 3.10 (see pyproject.toml)
+#
+# Install:
+#   pip install -r requirements.txt
+#   pip install -e .          # register `fashionrec` CLI
+#
+# macOS + LightGBM: if import fails with libomp, run:
+#   brew install libomp
+
+# ---------------------------------------------------------------------------
+# Core: data prep, manifests, experiment YAML, parquet artifacts
+# ---------------------------------------------------------------------------
+pandas>=2.0
+numpy>=1.24
+pyarrow>=14.0
+PyYAML>=6.0
+
+# ---------------------------------------------------------------------------
+# SASRecF sequence model (baseline + industrial sequence channel)
+# RecBole pulls torch/tqdm/scipy etc.; torch is listed explicitly for clarity.
+# ---------------------------------------------------------------------------
+torch>=2.0
+recbole>=1.2.0
+tqdm>=4.66
+
+# ---------------------------------------------------------------------------
+# Industrial: LightGBM LambdaRank (baseline profile does not require this)
+# ---------------------------------------------------------------------------
+lightgbm>=4.0
+
+# ---------------------------------------------------------------------------
+# Development & CI (make test / make check)
+# ---------------------------------------------------------------------------
+pytest>=8.0

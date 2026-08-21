@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fashionrec.experiment.context import RunContext
+from fashionrec.shared.experiment.context import RunContext
 from fashionrec.shared.runtime.contracts import PipelineOptions, PipelineStep
 
 

@@ -15,8 +15,8 @@ FashionRec-Transformer/
 ├── Makefile                        # 统一训练、续跑、评估命令入口
 ├── pyproject.toml                  # 包元数据与 fashionrec 命令注册
 ├── configs/
-│   ├── sasrecf.yaml                # SASRecF 训练配置（主实验）
-│   └── sasrec.yaml                 # SASRec 训练配置（v1 对照）
+│   ├── baseline/                   # Baseline 唯一正式配置
+│   └── industrial/                 # Industrial 唯一正式配置
 ├── data/                           # 原始与处理后数据（大文件见 .gitignore）
 ├── docs/                           # 实验报告与入门指南
 ├── outputs/                        # checkpoint / 召回 CSV / 评估 JSON
@@ -25,12 +25,8 @@ FashionRec-Transformer/
 │       ├── cli.py                  # 唯一公开 Python 命令入口
 │       ├── baseline/               # 最小四路 RRF 应用
 │       ├── industrial/             # 购物篮/PIT/扩展召回/LambdaRank 应用
-│       ├── shared/                 # ID、Candidate、接口、I/O、指标、运行器
-│       ├── data/ recall/ ranking/  # 旧 import 兼容 alias/facade
-│       ├── training/ evaluation/
-│       ├── experiment/             # 统一配置、运行上下文与产物路径
-│       └── pipeline/               # 旧 profile pipeline 兼容入口
-├── tests/
+│       └── shared/                 # domain/interfaces/io/metrics/experiment/runtime
+├── tests/                          # shared/baseline/industrial/pipelines/integration
 ├── requirements.txt
 └── README.md
 ```
@@ -39,7 +35,7 @@ FashionRec-Transformer/
 
 ## Makefile 统一入口
 
-日常训练与评估统一从 Makefile 启动。Makefile 不复制流水线逻辑，所有目标最终都进入 `fashionrec` CLI，再由 package 内的 pipeline 层根据统一配置和 run-scoped 产物目录编排。
+日常训练与评估统一从 Makefile 启动。Makefile 不复制流水线逻辑，而是直接调用 Baseline 或 Industrial 各自的 CLI，由应用内部的 pipeline 层按独立配置和 run-scoped 产物目录编排。
 
 两条链路使用独立配置和产物命名空间。它们只共享只读的 `data/raw/` 与源码，不共享处理数据、checkpoint、候选、排序模型、权重或指标：
 
@@ -91,15 +87,15 @@ make downstream PROFILE=baseline RUN_ID=exp-001
 
 | 步骤 | Make 目标 / CLI | 说明 | 必需 |
 |------|------|------|------|
-| ① | `make data` / `fashionrec data` | filter（可选）→ preprocess → split → hm_seq → item 特征 | ✅ |
+| ① | `make data` / 应用内 `data` | filter（可选）→ preprocess → split → hm_seq → item 特征 | ✅ |
 | ② | `make train` / 应用内 `train` | 使用各应用自己的 `models/sasrecf.yaml` 训练 SASRecF | ✅ |
-| ③ | `make select-checkpoint` / `fashionrec select-checkpoint` | 完整 valid 用户周 MAP@12 选择 checkpoint | ✅ |
-| ④ | `make recall` / `fashionrec recall` | 使用选定模型导出 valid/test 召回 | ✅ |
-| ⑤ | `make candidates` / `fashionrec candidates` | baseline 四路或 industrial 扩展多路候选物化 | ✅ |
+| ③ | `make select-checkpoint` / 应用内 `select-checkpoint` | 完整 valid 用户周 MAP@12 选择 checkpoint | ✅ |
+| ④ | `make recall` / 应用内 `recall` | 使用选定模型导出 valid/test 召回 | ✅ |
+| ⑤ | `make candidates` / 应用内 `candidates` | baseline 四路或 industrial 扩展多路候选物化 | ✅ |
 | ⑥ | Industrial `ranker-sequence` | 复用唯一 `sasrecf_selected.pth`，按各训练快照的用户历史生成 LightGBM 序列证据 | Industrial |
 | ⑦ | Industrial `ranker-dataset/train/predict` | 拼接含 `sasrecf_present/score/rank` 的排序表并训练 LambdaRank | Industrial |
-| ⑧ | `make weights` / `fashionrec weights` | valid 上坐标下降搜索融合权重 | ✅ |
-| ⑨ | `make evaluate` / `fashionrec evaluate` | RRF / LambdaRank + MAP@12（test 只在最终阶段评估） | ✅ |
+| ⑧ | `make weights` / 应用内 `weights` | valid 上坐标下降搜索融合权重 | ✅ |
+| ⑨ | `make evaluate` / 应用内 `evaluate` | RRF / LambdaRank + MAP@12（test 只在最终阶段评估） | ✅ |
 
 ### 一键跑全流程
 
@@ -112,23 +108,23 @@ make industrial WITH_FILTER=1
 
 正式流水线会创建 `outputs/runs/<profile>/<run_id>/`，把配置快照、checkpoint、召回、候选、排序和指标隔离保存。完整依赖方向与数据契约见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
-两条链现在是两个 top-level 应用。Baseline 位于 `src/fashionrec/baseline/`，Industrial 位于 `src/fashionrec/industrial/`；它们分别拥有 data/models/recall/ranking/evaluation/pipeline/CLI 及正式算法实现。Baseline 已清除 events/labels/PIT/LambdaRank 和扩展召回副本，数据准备只生成自身消费的交互、序列与 `hm_seq.item`。共享层只保留 ID、Candidate、Recall/Ranker 接口、中立 I/O、纯指标和运行器；旧顶层算法目录仅用于 import 兼容。
+两条链现在是两个 top-level 应用。Baseline 位于 `src/fashionrec/baseline/`，Industrial 位于 `src/fashionrec/industrial/`；它们分别拥有 data/models/recall/ranking/evaluation/pipeline/CLI 及正式算法实现。Baseline 已清除 events/labels/PIT/LambdaRank 和扩展召回副本，数据准备只生成自身消费的交互、序列与 `hm_seq.item`。共享层只保留 ID、Candidate、Recall/Ranker 接口、中立 I/O、纯指标和运行器；旧顶层算法目录和 import API 已删除。
 
 可选参数：
 
 - `--run-id <id>`：继续使用指定运行目录
-- `--no-strict`：允许旧流程的兼容回退
+- `--no-strict`：关闭部分输入和产物的严格存在性检查
 - `--skip-data-prep` / `--skip-train` / `--skip-checkpoint-selection` / `--skip-recall` / `--skip-candidates` / `--skip-weight-search`：跳过对应步骤
 
 ### 统一 Python CLI
 
 ```bash
 PYTHONPATH=src python -m fashionrec --help
+PYTHONPATH=src python -m fashionrec baseline pipeline --experiment-config configs/baseline/experiment.yaml
+PYTHONPATH=src python -m fashionrec industrial pipeline --experiment-config configs/industrial/experiment.yaml
+PYTHONPATH=src python -m fashionrec profile-data --help
 PYTHONPATH=src python -m fashionrec.baseline pipeline --experiment-config configs/baseline/experiment.yaml
 PYTHONPATH=src python -m fashionrec.industrial pipeline --experiment-config configs/industrial/experiment.yaml
-PYTHONPATH=src python -m fashionrec.baseline --help
-PYTHONPATH=src python -m fashionrec.industrial --help
-PYTHONPATH=src python -m fashionrec train --help
 ```
 
 执行 `pip install -e .` 后可直接使用 `fashionrec <command>`，不需要设置 `PYTHONPATH`。
@@ -151,7 +147,7 @@ filter（train 拟合商品集）→ preprocess → split → model_train → hm
     → valid 权重搜索 → offline_eval（MAP@12）
 ```
 
-四路召回：**SASRecF**、**Popular**、**Category Popular**、**Item2Item**。融合时按用户历史长度分档（high / medium / low / cold_start）；默认排序实现位于 `src/fashionrec/ranking/weighted_rrf.py`。
+四路召回：**SASRecF**、**Popular**、**Category Popular**、**Item2Item**。融合时按用户历史长度分档（high / medium / low / cold_start）；Baseline 排序实现位于 `src/fashionrec/baseline/ranking/weighted_rrf.py`。
 
 Industrial 只训练一个 SASRecF checkpoint。LightGBM 的历史训练快照复用该模型，但输入历史仍按快照日截断。由于模型参数、商品词表和 checkpoint 选择可能看过历史快照之后的数据，这属于用户选择的“简单复用”实验协议，不是严格 PIT；相关报告会写入 `causal_model=false`，离线 LambdaRank 指标可能偏高。
 
@@ -245,21 +241,14 @@ make evaluate RUN_ID=exp-001
 |-------------|------|
 | `src/fashionrec/baseline/` | 旧协议数据、SASRecF、四路召回、Weighted RRF、评估与独立 DAG |
 | `src/fashionrec/industrial/` | 购物篮/PIT、扩展召回、SASRecF、LambdaRank、next-basket 评估与独立 DAG |
-| `src/fashionrec/shared/` | domain、interfaces、io、metrics、runtime 中立内核 |
-| `src/fashionrec/{data,recall,ranking,training,evaluation,candidates}/` | 旧 import 兼容 alias/facade，不承载正式算法；alias 不再保留同名 shadow 文件 |
-| `src/fashionrec/domain/` | 旧领域契约 import 兼容 facade |
-| `src/fashionrec/experiment/` | 配置、运行上下文与产物路径 |
-| `src/fashionrec/pipeline/` | 旧 profile pipeline 兼容入口；正式 DAG 在两应用内部 |
+| `src/fashionrec/shared/` | domain、interfaces、io、metrics、experiment、runtime 中立内核 |
+| `src/fashionrec/cli.py` | 只路由 `baseline`、`industrial` 和 `profile-data` 三个明确入口 |
 
 ---
 
 ## v1 对照
 
-```bash
-PYTHONPATH=src python -m fashionrec train --config configs/sasrec.yaml
-```
-
-详见 [docs/v1_experiment_report.md](docs/v1_experiment_report.md)。
+早期统一训练命令和根级模型配置已经退役。历史实验口径与结果仅保留在 [docs/v1_experiment_report.md](docs/v1_experiment_report.md) 中，不再作为当前可执行入口。
 
 ---
 

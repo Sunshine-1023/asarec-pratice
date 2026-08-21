@@ -1,10 +1,11 @@
 """Train SASRec model via RecBole."""  # 通过 RecBole 训练 SASRec 模型的脚本
 
+from __future__ import annotations
+
 import argparse  # 导入命令行参数解析模块
 import json  # 导入 JSON 序列化模块
 from logging import getLogger  # 导入日志记录器获取函数
 from pathlib import Path  # 导入路径处理类
-import torch  # 导入 PyTorch 深度学习框架
 
 from fashionrec.baseline.data.paths import ProcessedDataPaths
 from fashionrec.baseline.models.sasrecf.checkpoints import install_validation_checkpoint_shortlist
@@ -47,6 +48,7 @@ def _assert_prepared_training_data(model_name: str, data_paths: ProcessedDataPat
 
 def _select_device() -> torch.device:  # 选择训练设备
     """Select training device with priority: cuda > mps > cpu."""  # 按 cuda > mps > cpu 优先级选择训练设备
+    import torch  # 仅真实训练时加载，避免测试/帮助命令提前初始化 Torch
     if torch.cuda.is_available():  # 若 CUDA 可用
         return torch.device("cuda")  # 使用 CUDA 设备
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():  # 若 MPS 可用
@@ -90,7 +92,7 @@ def run_sasrec_with_device(  # 在选定设备上运行 SASRec 训练与验证
     checkpoint_dir: Path | None = None,  # 可选 run-scoped checkpoint 目录
     checkpoint_shortlist_size: int = 5,
 ) -> tuple[float, dict, list[str]]:  # 返回 RecBole 验证结果与粗筛 checkpoint 列表
-    from fashionrec.pytorch_compat import patch_recbole_compat  # 仅训练时需要 RecBole 兼容补丁
+    from fashionrec.shared.runtime.pytorch_compat import patch_recbole_compat  # 仅训练时需要 RecBole 兼容补丁
 
     patch_recbole_compat()  # 在导入 RecBole 前应用兼容补丁
     from recbole.config import Config  # 延迟导入可选训练依赖
@@ -170,7 +172,7 @@ def _metrics_to_float_dict(metrics: dict) -> dict:  # 将指标字典值转为�
 def main(  # 命令行入口函数
     argv: list[str] | None = None,  # 显式命令参数
     *,  # 后续参数仅允许关键字传递
-    default_config: str | Path = "configs/sasrec.yaml",  # 默认模型配置
+    default_config: str | Path = "configs/baseline/models/sasrecf.yaml",
 ) -> None:  # 无返回值
     parser = argparse.ArgumentParser(prog="fashionrec train", description="Train SASRec/SASRecF on H&M data")  # 创建参数解析器
     parser.add_argument("--config", default=str(default_config))  # 配置文件路径参数

@@ -8,10 +8,10 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from fashionrec.domain.candidates import Candidate
-from fashionrec.experiment.config import load_experiment_config
+from fashionrec.shared.domain.candidates import Candidate
+from fashionrec.shared.experiment.config import load_experiment_config
 from fashionrec.industrial.ranking import dataset_materialization as command
-from fashionrec.recall.generator import write_candidate_csv
+from fashionrec.industrial.recall.generator import write_candidate_csv
 
 
 def _events() -> pd.DataFrame:

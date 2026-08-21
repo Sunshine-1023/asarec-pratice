@@ -184,3 +184,26 @@
 - 最终实现只保留 `checkpoints/sasrecf/` shortlist 与 `checkpoints/sasrecf_selected.pth`；不存在 `sasrecf_ranker_snapshots`。valid/test 和历史 ranker train 证据都引用同一个 selected checkpoint。
 - 历史 train 快照只重建内存中的 item sequence 并执行 full-sort 推理，不再为每个快照创建 RecBole dataset 或训练模型。训练成本从正式模型 + 4 个快照模型降为正式模型 1 次，仍需承担 4 个快照的推理成本。
 - 当前代码验证证明单模型契约和表结构闭环，不证明实际指标提升；由于用户选择简单复用，任何 LambdaRank 离线提升都必须同时展示非严格 PIT 警告。
+
+## 2026-08-21 双应用结构收口
+
+- 本轮只处理目录所有权、正式 import、测试归类、legacy 标识和文档一致性，不改变两条 DAG、模型参数、标签、候选、排序或指标协议。
+- `fashionrec.experiment` 与 `fashionrec.pytorch_compat` 是两条应用共同依赖的中立基础设施，真实实现应迁入 `fashionrec.shared`；旧路径只保留兼容导出。
+- 顶层 `data/recall/ranking/training/evaluation/pipeline` 仍需为历史调用保留最薄 facade，但正式应用和正式测试不应依赖这些路径。
+- 根目录 legacy YAML 暂不直接删除，先明确 deprecated/compatibility 状态，避免破坏仍存在的旧统一 CLI。
+- `requirements.txt` 当前已有用户修改，本轮不触碰。
+- 最终真实公共实现只存在 `shared/{domain,interfaces,io,metrics,experiment,runtime}`；`fashionrec.experiment` 与 `fashionrec.pytorch_compat` 只保留兼容 facade。
+- 正式测试已直接导入所属应用/shared；旧统一 CLI 验证单独放在 `tests/compatibility/`。
+- 将 SASRecF training/recall 的 Torch 导入改为真实训练/推理时惰性加载，修复全量 pytest 中 Torch 与 LightGBM 原生运行时的导入顺序崩溃。
+- 当前源码与测试目录的 `__pycache__` 及根 `.pytest_cache` 已清理，它们均已在 `.gitignore` 中。
+
+## 2026-08-21 兼容层退役
+
+- 用户已明确授权删除旧兼容 API，因此可移除 `data/domain/recall/ranking/training/evaluation/experiment/pipeline/candidates` 和顶层 `pytorch_compat.py`。
+- 两条正式应用没有依赖这些 facade；仓库内剩余运行引用主要来自顶层旧 CLI 与 pipeline 测试。
+- 顶层 `fashionrec` 将仅保留明确应用路由：`fashionrec baseline ...`、`fashionrec industrial ...`、`fashionrec profile-data ...`。
+- `profile-data` 将直接路由到 `industrial.data.profile`，不再通过 `fashionrec.data` facade。
+- 根 legacy YAML 将删除；历史报告中的旧路径作为当时实验记录保留。
+- 最终结果：上述兼容目录、alias 和根 legacy YAML 已全部物理删除；`src/fashionrec/` 顶层只有 `baseline/`、`industrial/`、`shared/`、`cli.py`、`__init__.py`、`__main__.py`。
+- 顶层 CLI 只做明确路由，Baseline/Industrial 的算法实现、配置和 run-scoped 产物协议未改变；`profile-data` 直接调用 Industrial 数据体检模块。
+- 结构回归会断言退役命名空间不存在，运行时检查也确认 10 个旧模块无法 import。最终标准检查为 262 tests + 全 CLI smoke 通过。

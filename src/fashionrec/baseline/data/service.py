@@ -39,7 +39,7 @@ from fashionrec.baseline.data.split import (
     split_bounds_dict,
     split_by_time,
 )
-from fashionrec.experiment.config import load_experiment_config
+from fashionrec.shared.experiment.config import load_experiment_config
 
 
 DEFAULT_CONFIG = Path("configs/baseline/models/sasrecf.yaml")

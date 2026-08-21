@@ -120,6 +120,8 @@ test:
 
 check: test
 	$(CLI) --help >/dev/null
+	$(CLI) baseline --help >/dev/null
+	$(CLI) industrial --help >/dev/null
 	$(CLI) profile-data --help >/dev/null
 	$(BASELINE_CLI) --help >/dev/null
 	$(BASELINE_CLI) data --help >/dev/null

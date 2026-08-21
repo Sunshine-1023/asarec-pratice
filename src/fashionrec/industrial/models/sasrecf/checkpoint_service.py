@@ -15,7 +15,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--checkpoint-dir", type=Path, required=True)
     parser.add_argument("--data-dir", type=Path, default=None, help="Processed dataset root; defaults to data/processed.")
     parser.add_argument("--valid-inter", type=Path, default=None, help="Explicit valid split override.")
-    parser.add_argument("--config", type=Path, default=Path("configs/sasrecf.yaml"))
+    parser.add_argument("--config", type=Path, default=Path("configs/industrial/models/sasrecf.yaml"))
     parser.add_argument("--recall-dir", type=Path, required=True)
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--selected-model-path", type=Path, required=True)

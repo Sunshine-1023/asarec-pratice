@@ -58,8 +58,17 @@
 - [completed] 52. 用单模型为多个 LambdaRank train 快照生成序列召回证据
 - [completed] 53. 删除快照级训练配置、额外 checkpoint 与误导性文档
 - [completed] 54. 补充泄漏标识/单模型契约测试并完成全量回归
+- [completed] 55. 将 experiment 与 PyTorch 兼容实现迁入 shared，并保留旧路径 facade
+- [completed] 56. 迁移正式测试 import 与目录，使其直接验证 baseline/industrial/shared
+- [completed] 57. 收口 legacy 配置、兼容入口命名和双链文档
+- [completed] 58. 运行结构边界、全量测试、CLI 与静态检查
+- [completed] 59. 删除顶层算法/experiment/pipeline 兼容 facade
+- [completed] 60. 将顶层 CLI 收缩为 baseline/industrial/profile-data 明确路由
+- [completed] 61. 删除 legacy 配置与兼容测试，迁移 pipeline 测试到正式 import
+- [completed] 62. 更新 Makefile/文档并运行全量验证
 
 ## Decisions
+- 用户于 2026-08-21 明确授权退役全部旧兼容层；删除后不再支持 `fashionrec train/data/evaluate/...` 和 `fashionrec.<legacy-package>` import，只保留明确的 baseline/industrial 应用入口。
 - `ranking.enabled: false` 时保持当前默认 RRF 链的执行成本和产物语义，不强制扫描额外事件/特征。
 - `ranking.enabled: true` 时由 pipeline 显式开启 labels、PIT user/cross features，并在 ranker 训练前生成固定 ranking parquet。
 - LambdaRank 训练样本必须只使用 as-of 及以前历史；禁止用训练完成后的 SASRecF 为更早快照生成会泄漏的序列分数。
@@ -75,14 +84,14 @@
 - 新目标依赖方向为 `baseline|industrial application -> shared kernel/algorithm libraries`；两应用之间禁止互相导入。
 - 两应用使用独立模块入口 `python -m fashionrec.baseline` 与 `python -m fashionrec.industrial`，Makefile 不再通过通用 pipeline 的 `--profile` 选择正式链路。
 - 允许共享无业务语义的领域契约、纯指标、通用算法实现和执行器；数据协议、命令入口、召回集合、模型配置、排序/评估协议与 DAG 必须归属各自应用。
-- 本轮按用户给出的物理目录落位；旧 `fashionrec.data/recall/ranking/training/evaluation` 只允许保留向新位置转发的兼容 facade，不再承载正式实现。
+- 本轮按用户给出的物理目录落位；用户随后明确授权退役旧 API，因此旧 `fashionrec.data/recall/ranking/training/evaluation` 等 facade 已全部删除。
 - 为避免一次重构改变实验结果，baseline 与 industrial 可以各自拥有同内容的首版算法实现；后续优化分别演进，跨链共享仅限 `shared` 中无业务倾向的契约、I/O、指标和运行时。
 - 清理策略采用“删 Baseline 协议外能力，不回收两应用核心算法到 shared”；保留两套 SASRecF/三路基础召回/RRF 的独立所有权。
 - Baseline `hm_seq.item` 改为只读取 SASRecF 所需 8 个类别字段和序列中实际出现的 SKU，不再构建完整 ranking item table。
-- 旧 import 兼容继续通过 package-level `sys.modules` alias 提供；已被 alias 遮蔽的同名物理 facade 文件直接删除，避免第三份假实现。
+- 不再提供旧 import alias；仓库公开 Python 表面只剩 Baseline、Industrial、shared 和三个顶层明确路由。
 
 ## Next Step
-单 SASRecF 简单复用链路已完成；下一步用新 run-id 真实运行 Industrial，测量 8GB CUDA 下的耗时、显存和 LambdaRank 指标。
+兼容层退役任务已完成；后续如需真实运行验证，应分别使用新的 run-id 执行 Baseline 和 Industrial 全量实验。
 
 ## Errors Encountered
 | Error | Attempt | Resolution |
@@ -106,3 +115,6 @@
 | `compileall` 在 Industrial 源码树生成 `__pycache__` | 1 | 仅清除本次检查生成的字节码缓存，未触碰源码和实验产物；后续验证使用 `PYTHONDONTWRITEBYTECODE=1` |
 | 用 `--dry-run` 检查 Industrial pipeline，但该 CLI 不提供该参数 | 1 | 命令在参数解析阶段退出、未执行步骤；后续改用 `build_pipeline_steps` 做只读 DAG 检查 |
 | 单次补丁同时匹配 progress/findings 尾部失败 | 1 | 补丁原子失败、无文件改动；读取实际尾部后分文件追加。 |
+| 测试切换到 Industrial 真实 import 后 9 项收集失败 | 1 | 兼容 facade 曾将 `data.command` 指向 service；已改为从 `data.service` 导入辅助函数，从 `events/baskets` 导入正式实现。 |
+| 合并运行所有分类测试时 LightGBM 原生层 segmentation fault | 1 | 与项目历史上 Torch/LightGBM 同进程冲突一致；改为按应用/模型边界分批回归，再用项目既有 `make check` 验证标准入口。 |
+| 删除根统一配置后完整测试仍期待 `fashionrec_v3` | 1 | 测试已改读 Baseline 正式 YAML，断言同步为其独立实验名 `fashionrec_baseline`。 |

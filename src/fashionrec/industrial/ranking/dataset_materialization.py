@@ -16,7 +16,7 @@ from fashionrec.shared.domain.candidates import Candidate
 from fashionrec.shared.domain.ids import canonical_item_id, canonical_user_id
 from fashionrec.industrial.evaluation.candidate_diagnostics import diagnose_users
 from fashionrec.industrial.evaluation.experiment_report import save_candidate_diagnostics
-from fashionrec.experiment.config import ExperimentConfig, load_experiment_config
+from fashionrec.shared.experiment.config import ExperimentConfig, load_experiment_config
 from fashionrec.industrial.ranking.dataset import RankingDataset, build_ranking_dataset, write_ranking_dataset
 from fashionrec.industrial.recall.generator import generate_candidates, read_candidate_csv
 from fashionrec.industrial.recall.channel_registry import build_rule_channel_registry

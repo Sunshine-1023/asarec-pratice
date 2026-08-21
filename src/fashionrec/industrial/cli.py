@@ -7,6 +7,7 @@ from fashionrec.shared.runtime.dispatch import ApplicationCommand, dispatch
 
 COMMANDS = {
     "pipeline": ApplicationCommand("fashionrec.industrial.pipeline.command", "Run the complete industrial DAG"),
+    "profile-data": ApplicationCommand("fashionrec.industrial.data.profile", "Profile raw H&M tables"),
     "data": ApplicationCommand("fashionrec.industrial.data.command", "Build events, baskets, labels and PIT data"),
     "train": ApplicationCommand("fashionrec.industrial.models.sasrecf.train", "Train industrial SASRecF channel"),
     "select-checkpoint": ApplicationCommand(
